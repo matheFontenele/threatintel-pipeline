@@ -18,9 +18,12 @@ works, where it does not, and being able to prove it.
 > `ip:port` split, credential in a header) and Feodo Tracker (public, CC0, per-port entries
 > collapsed to one IP indicator). URLhaus has a bronze-only collector: the credential sits
 > in the URL path, so it ships with the redaction design but without a silver mapping until a
-> live export confirms the columns. The identity/normalization/merge contract is tested end
-> to end, including a cross-source merge on the same IP. No false-positive rules, no scoring,
-> no API yet, so the metrics below stay empty on purpose.
+> live export confirms the columns. On top of silver, two explainable rules run — FP-04
+> (stale evidence, per-type TTL) and FP-05 (single-source corroboration) — and emit a report
+> reproducible from `(snapshot, as_of, config_hash)` that carries ids and counts, never
+> indicator values. The identity/normalization/merge contract is tested end to end, including
+> a cross-source merge on the same IP. No scoring, no API yet, so the metrics below stay empty
+> on purpose.
 
 ## Architecture
 
@@ -49,6 +52,20 @@ flowchart LR
 4. **Public feeds are untrusted input.** Data, never instructions.
 5. **No feed data in the repository.** Code and schema are public; each operator brings
    their own key.
+
+## False-positive rules
+
+Two rules run today over silver. Each returns a status — `fired`, `not_fired`,
+`not_applicable` or `insufficient_data` — and, only when it fires, a coarse strength:
+
+| Code | Question | Reads |
+|---|---|---|
+| `FP-04_STALE` | Is the evidence older than its type's TTL? | `first_seen` / `last_seen` |
+| `FP-05_SINGLE_SOURCE` | Does only one community feed report it? | independent source names |
+
+Full rationale, TTL table and known limits: [`docs/rules.md`](docs/rules.md). The report is
+keyed by indicator id and carries counts and rates only, so it can be published even for
+feeds whose terms forbid redistributing indicator values.
 
 ## Evaluation
 
@@ -92,7 +109,7 @@ Kafka/Spark here would be engineering theater.
 │   └── threatintel/
 │       ├── collectors/ # one module per source
 │       ├── normalize/  # common indicator schema
-│       ├── fp_rules/   # one rule per file, with a reason code
+│       ├── fp_rules/   # FP-04/FP-05, engine, explainable report
 │       ├── enrich/
 │       ├── scoring/
 │       ├── api/
@@ -118,6 +135,7 @@ make collect-feodo      # Feodo C2 blocklist -> data/bronze/feodo/... (no creden
 make collect-threatfox  # ThreatFox 7-day batch -> data/bronze/threatfox/... (needs ABUSECH_AUTH_KEY)
 make collect-urlhaus    # URLhaus recent export -> data/bronze/urlhaus/... (bronze only, needs key)
 make silver             # bronze -> data/silver/indicators.parquet, upsert by indicator id
+make rules              # FP-04/FP-05 report over silver (pass --as-of for reproducibility)
 make ingest             # collect-kev + collect-feodo + collect-threatfox + silver
 make test
 ```

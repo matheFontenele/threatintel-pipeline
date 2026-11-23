@@ -55,6 +55,30 @@ def test_window_is_min_first_seen_and_max_last_online(feodo_payload):
     assert indicator.first_seen.tzinfo is not None
 
 
+def test_a_date_only_last_online_is_parsed_not_dropped(feodo_payload):
+    """The live export serves `last_online` as `YYYY-MM-DD`; dropping it hid staleness."""
+    payload = json.loads(json.dumps(feodo_payload))
+    for entry in payload:
+        entry["last_online"] = entry["last_online"][:10]
+
+    result = indicators_from_feodo(payload, bronze_ref=REF)
+
+    assert all(item.last_seen is not None for item in result.indicators)
+    assert all(item.last_seen.tzinfo is not None for item in result.indicators)
+    indicator = _by_value(result)["203.0.113.10"]
+    assert indicator.last_seen.isoformat().startswith("2026-11-23T00:00")
+
+
+def test_an_unparseable_timestamp_costs_the_date_not_the_row(feodo_payload):
+    payload = json.loads(json.dumps(feodo_payload))
+    payload[0]["last_online"] = "yesterday"
+
+    result = indicators_from_feodo(payload, bronze_ref=REF)
+
+    assert len(result) == 3
+    assert result.rejected == []
+
+
 def test_confidence_is_one_and_one_feed_counts_once(feodo_payload):
     result = indicators_from_feodo(feodo_payload, bronze_ref=REF)
     assert all(item.source_confidence == {"feodo": 1.0} for item in result.indicators)

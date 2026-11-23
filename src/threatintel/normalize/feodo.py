@@ -42,13 +42,23 @@ class FeodoResult:
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
-    """Feodo timestamps look like `2026-11-23 06:00:00`, served in UTC."""
+    """Feodo timestamps come in two shapes, both UTC.
+
+    `first_seen` is a full `YYYY-MM-DD HH:MM:SS`; the live export serves `last_online` as a
+    bare `YYYY-MM-DD`. Accepting only the first shape silently dropped `last_seen` on every
+    live row, which made the aging rule fall back to `first_seen` and call a currently
+    listed C2 months stale. A bare date is treated as midnight UTC — the age can be up to a
+    day conservative, never optimistic.
+    """
     if not isinstance(value, str) or not value.strip():
         return None
-    try:
-        return datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-    except ValueError:
-        return None
+    text = value.strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    return None
 
 
 def _malware_tags(value: Any) -> set[str]:

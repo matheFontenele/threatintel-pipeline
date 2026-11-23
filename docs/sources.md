@@ -132,10 +132,15 @@ Operational notes:
 - **Feodo endpoint** (`verified 2026-11-23`):
   `GET https://feodotracker.abuse.ch/downloads/ipblocklist.json`, no key, a JSON **array**.
   Entry fields observed: `ip_address, port, status, hostname, as_number, as_name, country,
-  first_seen, last_online, malware`. `status` is `online` or `offline`; timestamps are
-  `YYYY-MM-DD HH:MM:SS` in UTC. The same IP appears once per open port, so the normalizer
+  first_seen, last_online, malware`. `status` is `online` or `offline`. `first_seen` is a
+  full `YYYY-MM-DD HH:MM:SS` in UTC; the live export serves `last_online` as a bare
+  `YYYY-MM-DD` (verified 2026-11-23), so the normalizer accepts both and treats a bare date
+  as midnight UTC. The same IP appears once per open port, so the normalizer
   groups by IP, keeps `ports` as an attribute, and calls the host `online` if any entry is.
-  An empty array is legitimate — the list holds only currently active C2s.
+  An empty array is legitimate — the provider prunes the list, so zero entries is a fact
+  about the botnets, not a broken feed. Note that "listed" is not "currently active": on
+  the 2026-11-23 snapshot every entry's `last_online` was months old, which is exactly what
+  FP-04 exists to surface.
 
 ### AbuseIPDB
 

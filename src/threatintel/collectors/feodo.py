@@ -7,8 +7,8 @@ one that needs no Auth-Key: the JSON blocklist is served openly.
 Two shape differences from the other feeds matter downstream:
 
 - the payload is a JSON **array**, not an object with a count;
-- an empty array is legitimate. The list is pruned to currently active C2s and can be
-  empty at any moment, which is a fact about the botnets, not a broken feed.
+- an empty array is legitimate. The provider prunes the list, so it can be empty at
+  any moment, which is a fact about the botnets, not a broken feed.
 """
 
 from __future__ import annotations

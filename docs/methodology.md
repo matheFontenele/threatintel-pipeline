@@ -58,7 +58,7 @@ estimate.
 Deliberate oversampling of the hard cases, because a set dominated by obvious malware
 measures nothing:
 
-- indicators that only one source reports (the echo problem, FP-06);
+- indicators that only one source reports (the echo problem, FP-05);
 - indicators whose source score is high but whose tags suggest scanning (FP-08);
 - indicators inside large cloud/CDN ranges (FP-02);
 - KEV-linked indicators (FP-10) — sampled *separately*, see §7.
@@ -104,6 +104,8 @@ that rule. Otherwise the rule scores perfectly by construction. Concretely:
 | FP-01 RIOT membership | RIOT | "is in RIOT" as a label |
 | FP-02 verified crawler | rDNS/CDN ranges | rDNS agreement alone |
 | FP-03 source FP list | the source's own FP list | that list |
+| FP-04 stale evidence | `first_seen` / `last_seen` | "looks old" as a label |
+| FP-05 single source | independent feed count | "reported by two feeds" as a label |
 | FP-08 internet noise | GreyNoise noise classification | GreyNoise classification |
 | FP-10 KEV linkage | KEV | "is in KEV" as a label |
 
