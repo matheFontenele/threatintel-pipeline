@@ -12,7 +12,7 @@ It is built as a portfolio project in detection / threat-intel engineering. The
 interesting part is not the ingestion — it is the evaluation: knowing where the filter
 works, where it does not, and being able to prove it.
 
-> **Status: ingestion through scoring.** The design is written (threat model, source inventory,
+> **Status: ingestion through API.** The design is written (threat model, source inventory,
 > evaluation protocol, decision records). Working today: four collectors feeding one silver
 > table, all run live on 2026-11-23 — CISA KEV (1,790 CVEs, 0 rejected), ThreatFox (10,392
 > IOCs over 7 days, four indicator types, `ip:port` split, credential in a header), Feodo
@@ -25,8 +25,11 @@ works, where it does not, and being able to prove it.
 > rules report and the scoring summary are reproducible from
 > `(snapshot, as_of, config_hash)` and carry ids and counts, never indicator values. The
 > snapshot holds 115,476 indicators; 122 URLs are corroborated across ThreatFox and URLhaus,
-> which is the cross-source merge the rules depend on. No API and no evaluation against hand
-> labels yet, so the metrics below stay empty on purpose.
+> which is the cross-source merge the rules depend on. A read-only JSON API serves the scored
+> table — filtered pages, per-indicator detail, run aggregates, and the run clock plus both
+> config hashes in every data response. It is loopback by default and publishes a new run by
+> restarting, so a response can never mix two runs. Evaluation against hand labels is the next
+> milestone, so the metrics below stay empty on purpose.
 
 ## Architecture
 
@@ -38,12 +41,10 @@ flowchart LR
     D --> E[(Silver<br/>indicators + FP reasons)]
     E --> F[Enrichment<br/>rDNS, ASN/CDN, noise]
     F --> G[(Gold<br/>scored + explained)]
-    G --> H[API FastAPI]
-    G --> I[Dashboard Streamlit]
-    G --> J[Snapshot export]
-    H --> K[Manual review]
-    K --> L[Labeled set]
-    L --> M[Evaluation]
+    G --> H[Read API<br/>FastAPI]
+    H --> I[Consumers<br/>their own dashboards]
+    G --> M[Evaluation against labels]
+    L[Hand-labeled set] --> M
 ```
 
 ## Design principles
@@ -109,14 +110,14 @@ the cases where the filter fails.
 | [`docs/methodology.md`](docs/methodology.md) | Labeling protocol, metrics, ablation, limitations |
 | [`docs/rules.md`](docs/rules.md) | FP-04/FP-05 contract, TTLs and known limits |
 | [`docs/scoring.md`](docs/scoring.md) | Weights, caps, bands and worked examples |
+| [`docs/api.md`](docs/api.md) | Read API contract, cursor semantics, errors and security posture |
 | [`docs/sources.md`](docs/sources.md) | Feeds used, terms, limits, collection cadence |
 | [`docs/decisions/`](docs/decisions/) | Short decision records with rationale |
 
 ## Stack
 
-Python, DuckDB + Parquet for the analytical store, FastAPI for the read API,
-Streamlit for the dashboard, pytest for tests. No server to operate; the whole
-pipeline runs from a checkout.
+Python, DuckDB + Parquet for the analytical store, FastAPI/uvicorn for the read API,
+pytest for tests. No server to operate; the whole pipeline runs from a checkout.
 
 Deliberate choice: no streaming infrastructure. Volume is measured in tens of
 thousands of indicators per day, which a single-process batch job handles comfortably.
@@ -133,9 +134,9 @@ Kafka/Spark here would be engineering theater.
 │       ├── normalize/  # common indicator schema
 │       ├── fp_rules/   # FP-04/FP-05, engine, explainable report
 │       ├── enrich/
-│       ├── scoring/
-│       ├── api/
-│       └── dashboard/
+│       ├── scoring/    # policy, scorer, gold table
+│       ├── api/        # read-only FastAPI over gold
+│       └── dashboard/  # placeholder; frontend is out of repo scope (0002)
 ├── eval/
 │   ├── labeled_sample/ # hand-labeled items (no restricted feed data)
 │   └── run_eval.py
@@ -159,6 +160,7 @@ make collect-urlhaus    # URLhaus recent export -> data/bronze/urlhaus/... (need
 make silver             # bronze -> data/silver/indicators.parquet, upsert by indicator id
 make rules              # FP-04/FP-05 report over silver (pass --as-of for reproducibility)
 make gold AS_OF=2026-11-23T12:00:00Z   # score into data/gold/indicators.parquet
+make api                # serve gold read-only on 127.0.0.1:8000 (restart after make gold)
 make ingest             # all four collectors + silver
 make test
 ```
@@ -170,16 +172,18 @@ records the last successful fetch per source and refuses a repeat inside one hou
 (`--min-interval`), because abuse.ch throttles accounts that exceed fair use. The remaining
 sources in [`docs/sources.md`](docs/sources.md) stay unimplemented until their terms row is
 verified — and note `docs/decisions/0007`: feed-derived indicator values are never published,
-so test fixtures use documentation ranges only. API and dashboard are not implemented yet.
+so test fixtures use documentation ranges only. The API serves `/docs`, `/health` and the
+`/v1/` endpoints; the dashboard is out of scope, since consumers build their own on top of
+the API (`docs/decisions/0002`). Evaluation is not implemented yet.
 
 ## Scope
 
 In scope: batch ingestion of a few public feeds, normalization, explainable
-false-positive filtering, scoring with reasons, evaluation on a hand-labeled set,
-read API, dashboard, review queue.
+false-positive filtering, scoring with reasons, a read-only API, and evaluation on a
+hand-labeled set.
 
-Out of scope for now: real-time streaming, network-traffic detection, paid feeds,
-commercial product decisions.
+Out of scope: dashboards and other frontends (consumers build their own on the API),
+real-time streaming, network-traffic detection, paid feeds, commercial product decisions.
 
 ## License
 

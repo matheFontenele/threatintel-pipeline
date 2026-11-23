@@ -5,7 +5,7 @@
 -include .env
 export ABUSECH_AUTH_KEY
 
-.PHONY: install lint test collect-kev collect-feodo collect-threatfox collect-urlhaus silver rules gold ingest
+.PHONY: install lint test collect-kev collect-feodo collect-threatfox collect-urlhaus silver rules gold api ingest
 
 install:
 	python3 -m venv .venv
@@ -43,6 +43,11 @@ silver:
 # without it the report uses the current clock, which is convenient but not publishable.
 rules:
 	.venv/bin/python -m threatintel.fp_rules --silver data/silver/indicators.parquet
+
+# Read-only API over gold, bound to loopback. It copies the table into memory at startup,
+# so restart after `make gold` to serve a new run.
+api:
+	.venv/bin/python -m threatintel.api --gold data/gold/indicators.parquet
 
 # Scoring adds one weight per rule finding and writes data/gold. Same reproducibility
 # rule: pass --as-of (make gold AS_OF=2026-11-23T10:30:00Z) for a published number.

@@ -7,12 +7,20 @@ without the project's models and the API can serve it without recomputing rules.
 The file is derived output and lives under `data/`, which is gitignored. `write_gold` is
 atomic for the same reason silver is: a half-written gold table is worse than a stale one,
 because the API would serve it with no sign that it is truncated.
+
+The run metadata (`as_of`, both config hashes) is stored per row rather than in a sidecar.
+A sidecar is two files that can be separated or half-replaced; a repeated string costs
+almost nothing after Parquet dictionary encoding, and a row copied out of the table can
+still name the run that produced it. A table that mixes rows from two runs is rejected on
+read, because that is the failure a per-row design would otherwise permit.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import pyarrow as pa
@@ -44,11 +52,25 @@ GOLD_SCHEMA = pa.schema(
         pa.field("attributes_json", pa.string(), nullable=False),
         pa.field("ingest_version", pa.string(), nullable=False),
         pa.field("bronze_refs", pa.list_(pa.string())),
+        pa.field("as_of", pa.timestamp("us", tz="UTC"), nullable=False),
+        pa.field("rules_config_hash", pa.string(), nullable=False),
     ]
 )
 
 
-def _gold_row(item: ScoredIndicator) -> dict[str, object]:
+@dataclass(frozen=True)
+class GoldTable:
+    """One scored run: the rows plus the metadata that makes them reproducible."""
+
+    as_of: datetime | None
+    policy_config_hash: str | None
+    rules_config_hash: str | None
+    items: tuple[ScoredIndicator, ...]
+
+
+def _gold_row(
+    item: ScoredIndicator, *, as_of: datetime, rules_config_hash: str
+) -> dict[str, object]:
     row = indicator_row(item.indicator)
     score = item.score
     row.update(
@@ -66,6 +88,8 @@ def _gold_row(item: ScoredIndicator) -> dict[str, object]:
             "score_caps": list(score.caps),
             "policy_version": score.policy_version,
             "policy_config_hash": score.policy_config_hash,
+            "as_of": as_of,
+            "rules_config_hash": rules_config_hash,
         }
     )
     return row
@@ -74,7 +98,7 @@ def _gold_row(item: ScoredIndicator) -> dict[str, object]:
 def write_gold(report: ScoringReport, path: Path) -> Path:
     """Write the scored table, highest score first."""
     rows = [
-        _gold_row(item)
+        _gold_row(item, as_of=report.as_of, rules_config_hash=report.rules_config_hash)
         for item in sorted(
             report.scored,
             key=lambda entry: (
@@ -92,10 +116,18 @@ def write_gold(report: ScoringReport, path: Path) -> Path:
     return path
 
 
-def read_gold(path: Path) -> list[ScoredIndicator]:
+def read_gold(path: Path) -> GoldTable:
     """Load gold back into models so tests and the API exercise the same contract."""
+    rows = pq.read_table(path).to_pylist()
+    if not rows:
+        return GoldTable(as_of=None, policy_config_hash=None, rules_config_hash=None, items=())
+
+    runs = {(row["as_of"], row["policy_config_hash"], row["rules_config_hash"]) for row in rows}
+    if len(runs) > 1:
+        raise ValueError(f"gold table mixes {len(runs)} runs; rewrite it with one scoring run")
+
     scored: list[ScoredIndicator] = []
-    for row in pq.read_table(path).to_pylist():
+    for row in rows:
         reasons = tuple(
             Reason(code=item["code"], weight=item["weight"], detail=item["detail"])
             for item in json.loads(row["score_reasons_json"])
@@ -111,7 +143,14 @@ def read_gold(path: Path) -> list[ScoredIndicator]:
             policy_config_hash=row["policy_config_hash"],
         )
         scored.append(ScoredIndicator(indicator=indicator_from_row(row), score=score))
-    return scored
+
+    first = rows[0]
+    return GoldTable(
+        as_of=first["as_of"],
+        policy_config_hash=first["policy_config_hash"],
+        rules_config_hash=first["rules_config_hash"],
+        items=tuple(scored),
+    )
 
 
-__all__ = ["GOLD_SCHEMA", "read_gold", "write_gold"]
+__all__ = ["GOLD_SCHEMA", "GoldTable", "read_gold", "write_gold"]

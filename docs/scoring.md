@@ -104,10 +104,11 @@ Clock: `2026-11-23T12:00:00Z`.
 
 Scoring reads silver and writes `data/gold/indicators.parquet` (gitignored, like all data).
 The table is silver plus the score columns: `score`, `band`, `needs_review`,
-`score_reasons_json`, `score_caps`, `policy_version`, `policy_config_hash`. Reasons are JSON
-so DuckDB and the API can read the table without the project's models. The policy hash is
-stored per row, so a row that is copied out of the table can still name the configuration
-that produced it.
+`score_reasons_json`, `score_caps`, `policy_version`, `policy_config_hash`, and the run
+metadata `as_of` and `rules_config_hash`. Reasons are JSON so DuckDB and the API can read the
+table without the project's models. The hashes and clock are stored per row, so a row copied
+out of the table can still name the run that produced it. A table whose rows disagree about
+the run is rejected on read.
 
 Rows are sorted by descending score, then type and value, so a consumer that truncates the
 scan gets the top of the queue first. The CLI summary printed to stdout carries counts only:

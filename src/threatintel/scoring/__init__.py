@@ -26,7 +26,7 @@ from threatintel.scoring.engine import (
     score_all,
     score_indicator,
 )
-from threatintel.scoring.gold import GOLD_SCHEMA, read_gold, write_gold
+from threatintel.scoring.gold import GOLD_SCHEMA, GoldTable, read_gold, write_gold
 from threatintel.scoring.policy import (
     BAND_HIGH,
     BAND_LOW,
@@ -49,6 +49,7 @@ __all__ = [
     "DEFAULT_POLICY",
     "DEFAULT_WEIGHTS",
     "GOLD_SCHEMA",
+    "GoldTable",
     "POLICY_VERSION",
     "Reason",
     "Score",

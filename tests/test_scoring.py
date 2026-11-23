@@ -267,12 +267,15 @@ def test_gold_roundtrip_preserves_scores_and_reasons(tmp_path):
     report = evaluate_and_score(indicators, as_of=NOW)
     path = write_gold(report, tmp_path / "gold" / "indicators.parquet")
 
-    restored = read_gold(path)
+    gold = read_gold(path)
+    restored = list(gold.items)
 
     assert [item.score.score for item in restored] == [70, 35], "output is ranked high to low"
     assert restored[0].score.reasons == report.scored[0].score.reasons
     assert [item.score.score for item in report.scored] == [70, 35], "input order is by type/value"
     assert restored[1].score.caps == report.scored[1].score.caps
+    assert gold.as_of == NOW
+    assert gold.rules_config_hash == report.rules_config_hash
     assert {item.score.policy_config_hash for item in restored} == {report.policy_config_hash}, (
         "a row that cannot name its policy cannot be reproduced"
     )
@@ -315,7 +318,7 @@ def test_cli_writes_gold_and_prints_counts_only(tmp_path, capsys):
     assert payload["bands"] == {"low": 1, "medium": 0, "high": 0}
     assert payload["reasons"]["STALE_EVIDENCE"] == 1
     assert "198.51.100.99" not in output
-    assert len(read_gold(gold)) == 1
+    assert len(read_gold(gold).items) == 1
 
 
 def test_cli_reports_a_missing_silver_table(tmp_path, capsys):

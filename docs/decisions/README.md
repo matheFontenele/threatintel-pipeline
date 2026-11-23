@@ -14,6 +14,7 @@ a reversed decision is *superseded*, not erased.
 | [0006](0006-indicator-identity.md) | Indicator identity, normalization and merge | accepted |
 | [0007](0007-publication-boundary.md) | Publication boundary: code and metrics public, feed data not | accepted |
 | [0008](0008-scoring-policy.md) | Scoring: integer points, versioned policy, structural caps | accepted |
+| [0009](0009-read-api-boundary.md) | Read API: one pinned run, keyset pages, no auth in Phase 1 | accepted |
 
 ## When a record is required
 
