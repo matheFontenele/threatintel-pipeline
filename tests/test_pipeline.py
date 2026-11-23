@@ -26,6 +26,15 @@ def _bronze_with_threatfox(
     (target / "_meta.json").write_text(json.dumps({"sha256": "tf", "count": 4}))
 
 
+def _bronze_with_feodo(
+    bronze: Path, feodo_payload_bytes: bytes, day: str = "2026-11-23"
+) -> None:
+    target = bronze / "feodo" / f"collection_date={day}"
+    target.mkdir(parents=True)
+    (target / "payload.json").write_bytes(feodo_payload_bytes)
+    (target / "_meta.json").write_text(json.dumps({"sha256": "fd", "count": 4}))
+
+
 def test_build_silver_maps_every_batch(tmp_path, kev_payload_bytes):
     bronze = _bronze_with_payload(tmp_path / "bronze", kev_payload_bytes)
     silver = tmp_path / "silver" / "indicators.parquet"
@@ -111,6 +120,33 @@ def test_same_source_on_two_dates_merges_the_indicator(
     assert len(indicators) == 4, "same indicators on two dates must not duplicate rows"
     assert domain.distinct_reporters == 1
     assert len(domain.bronze_refs) == 2
+
+
+def test_feodo_merges_with_threatfox_on_the_same_ip(
+    tmp_path, kev_payload_bytes, threatfox_payload_bytes, feodo_payload_bytes
+):
+    """The cross-source merge the contract promises, exercised on real mappings.
+
+    ThreatFox and Feodo both flag 198.51.100.23 (ThreatFox with `ip:port`, Feodo with a
+    C2 entry), so the two must collapse into one row with two reporters and attributes
+    kept under their own source key.
+    """
+    bronze = _bronze_with_payload(tmp_path / "bronze", kev_payload_bytes)
+    _bronze_with_threatfox(bronze, threatfox_payload_bytes)
+    _bronze_with_feodo(bronze, feodo_payload_bytes)
+    silver = tmp_path / "indicators.parquet"
+
+    stats = build_silver(bronze, silver)
+    indicators = read_indicators(silver)
+
+    assert stats == {"batches": 3, "rejected": 0, "source_rows": 12, "indicators": 11}
+    merged = next(item for item in indicators if item.value == "198.51.100.23")
+    assert merged.distinct_reporters == 2
+    assert set(merged.attributes) == {"threatfox", "feodo"}
+    assert merged.attributes["threatfox"]["port"] == 443
+    assert merged.attributes["feodo"]["ports"] == [443]
+    assert set(merged.source_confidence) == {"threatfox", "feodo"}
+    assert merged.tags == ["CobaltStrike", "Emotet", "QakBot", "botnet_cc"]
 
 
 def test_empty_bronze_reports_nothing_written(tmp_path, capsys):

@@ -1,0 +1,3 @@
+id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter
+3600001,2026-11-23 04:11:00,http://malware-download.example/payload.elf,online,2026-11-23 04:11:00,malware_download,"elf,mozi",https://urlhaus.abuse.ch/url/3600001/,reporter_x
+3600002,2026-11-23 05:22:00,https://update-check.example/gate.php,offline,2026-11-21 09:30:00,malware_download,"exe",https://urlhaus.abuse.ch/url/3600002/,reporter_y

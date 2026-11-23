@@ -69,6 +69,19 @@ def _kev_cve_ids() -> list[str]:
     return [entry["cveID"] for entry in payload["vulnerabilities"]]
 
 
+def _feodo_ips() -> list[str]:
+    payload = json.loads((FIXTURES / "feodo_sample.json").read_text())
+    return [entry["ip_address"] for entry in payload]
+
+
+def _urlhaus_indicator_urls() -> list[str]:
+    """Only the `url` column: `urlhaus_link` is a public provenance link, not an indicator."""
+    import csv
+
+    with (FIXTURES / "urlhaus_sample.csv").open(newline="") as handle:
+        return [row["url"] for row in csv.DictReader(handle)]
+
+
 def test_threatfox_fixture_values_are_documentation_only():
     iocs = _threatfox_iocs()
     assert iocs, "guard must not pass vacuously if the fixture loses its entries"
@@ -82,6 +95,20 @@ def test_kev_fixture_uses_public_cve_identifiers():
     # CVE identifiers are public, and KEV is a public-domain government work product, so
     # these are the one category allowed to name a real entry (see decisions/0007).
     assert all(CVE_RE.match(cve_id) for cve_id in cve_ids)
+
+
+def test_feodo_fixture_ips_are_documentation_only():
+    ips = _feodo_ips()
+    assert ips, "guard must not pass vacuously if the fixture loses its entries"
+    for ip in ips:
+        _check_ip(ip)
+
+
+def test_urlhaus_fixture_urls_are_documentation_only():
+    urls = _urlhaus_indicator_urls()
+    assert urls, "guard must not pass vacuously if the fixture loses its rows"
+    for url in urls:
+        _check_indicator(url)
 
 
 def test_guard_rejects_a_live_ip():

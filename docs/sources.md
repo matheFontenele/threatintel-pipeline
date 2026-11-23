@@ -29,9 +29,9 @@ documentation said when this file was written (2026-11-23)", not as current trut
 | # | Source | Provides | Auth | Free tier (as documented) | Planned cadence | Redistribution | Status |
 |---|---|---|---|---|---|---|---|
 | 1 | **CISA KEV** | CVEs with known exploitation in the wild | none | public JSON/CSV | daily | public domain work product — verify | `verified 2026-11-23` (endpoint + shape); redistribution still `unverified` |
-| 2 | **abuse.ch — URLhaus** | malicious URLs, payload hashes | Auth-Key in the URL path (free) | bulk export, regenerated every 5 min; do not fetch more often | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms); collector **not written** (key-in-URL, see note) |
+| 2 | **abuse.ch — URLhaus** | malicious URLs, payload hashes | Auth-Key in the URL path (free) | bulk export, regenerated every 5 min; do not fetch more often | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + export URL); collector implemented, **bronze only** (columns await a live run) |
 | 3 | **abuse.ch — ThreatFox** | IOCs (IP/domain/URL/hash) with malware family | Auth-Key in `Auth-Key` header (free) | `POST` batch query, `days` 1–7; drops IOCs older than 6 months (from 2025-05-01) | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + endpoint); collector implemented, live run pending a key |
-| 4 | **abuse.ch — Feodo Tracker** | botnet C2 IPs | Auth-Key (free) | bulk export | daily | same as above | `unverified` |
+| 4 | **abuse.ch — Feodo Tracker** | botnet C2 IPs | **none** — public JSON | no key, no documented limit; still one fetch per hour locally | daily | **CC0, publishable** (§3.4) — see `decisions/0007` | `verified 2026-11-23` (endpoint + shape); collector + normalizer implemented |
 | 5 | **abuse.ch — MalwareBazaar** | malware samples, hashes | Auth-Key (free) | API | weekly, metadata only | same as above | `unverified` |
 | 6 | **AbuseIPDB** | crowd-sourced IP abuse reports, confidence score, usage type, blacklist | API key (free tier) | low daily quota; blacklist capped (~10k entries reported) | daily blacklist | restricted — check explicitly | `unverified` |
 | 7 | **GreyNoise Community** | IP classification: `noise`, `RIOT` | API key | very low rate limit | on-demand, ≤ tens of IPs per run | check | `unverified` |
@@ -86,15 +86,23 @@ Consequences, recorded in `decisions/0007-publication-boundary.md`:
 - **No ThreatFox/URLhaus-derived indicator value is published** — not as a demo dataset, not
   as a sample in the test suite, not in a label file. Publishing a per-indicator score would
   embed the indicator, which is exactly the redistribution §7.3 restricts.
-- Published evaluation artifacts carry **aggregate metrics and a salted hash** of each
-  labelled indicator instead of its value. `docs/methodology.md` promises reproducibility;
-  this is the honest limit of it for restricted sources, and the report says so.
+- Published evaluation artifacts carry **aggregate metrics and the sampling rule**, never
+  the labelled indicator values. A salted hash is not a safe substitute: an IPv4 address is
+  small enough to enumerate, so the hash is reversible. `docs/methodology.md` promises
+  reproducibility; for restricted sources the honest version is "same protocol, own sample",
+  and the report says so.
 - No model training on the data. Not a constraint today (Phase 1 has no LLM), but recorded so
   it stays one.
 
 Operational notes:
 
-- One Auth-Key covers URLhaus, ThreatFox, MalwareBazaar and Feodo Tracker.
+- One Auth-Key covers URLhaus, ThreatFox and MalwareBazaar. Feodo Tracker needs no key at
+  all — its blocklist is served openly.
+- **Local fair-use guard** (`collectors/throttle.py`): the CLI records the last successful
+  fetch per source in `data/state/last_fetch.json` and refuses a second one inside the
+  minimum interval (default one hour). The state file is operational, not evidence: losing
+  it never invalidates a collection. `--min-interval 0` exists for deliberate one-offs and
+  `--force` does **not** bypass the guard.
 - **ThreatFox retention**: IOCs older than 6 months are no longer served (policy from
   2025-05-01). This is a hard freshness floor — the pipeline cannot assume a stable history,
   and aging rules must not be calibrated against data the source silently drops.
@@ -107,12 +115,27 @@ Operational notes:
   URLhaus.
 - The Hunting API publishes a **false-positive list**. It is a useful rule input (FP-03) and,
   for that reason, not a valid label for items that rule touches.
-- **URLhaus is deliberately not implemented yet.** Its export endpoint embeds the Auth-Key in
-  the URL path (`/v2/files/exports/<KEY>/recent.csv`). A key in a URL ends up in exception
-  messages, proxies, and any log that records the request line — a direct conflict with T5.
-  It ships only after a redaction design exists (custom exception text, no request-line
-  logging, key injected as a path segment that never reaches a formatter), and that design
-  is a prerequisite, not a TODO.
+- **URLhaus** (`verified 2026-11-23` for the export URL) embeds the Auth-Key in the URL
+  path (`/v2/files/exports/<KEY>/recent.csv`). A key in a URL ends up in exception messages,
+  proxies, and any log that records the request line — a direct conflict with T5. The
+  redaction design is now implemented in `collectors/urlhaus.py`:
+  - redirects are refused rather than followed;
+  - no error message interpolates the URL, only the HTTP status;
+  - transport failures are re-raised with `from None`, dropping the chained httpx exception
+    whose text contains the URL;
+  - `_meta.json` stores the endpoint with `<KEY>` and the write is refused if the key appears
+    in the serialized metadata;
+  - the key is validated as a bare path segment (no `/`, `.`, `?`) before it is interpolated.
+  It is **bronze only** on purpose: the CSV columns are asserted at collection time, but the
+  mapping to silver waits for one live export to confirm them, so the repository does not
+  claim a normalizer it has never run.
+- **Feodo endpoint** (`verified 2026-11-23`):
+  `GET https://feodotracker.abuse.ch/downloads/ipblocklist.json`, no key, a JSON **array**.
+  Entry fields observed: `ip_address, port, status, hostname, as_number, as_name, country,
+  first_seen, last_online, malware`. `status` is `online` or `offline`; timestamps are
+  `YYYY-MM-DD HH:MM:SS` in UTC. The same IP appears once per open port, so the normalizer
+  groups by IP, keeps `ports` as an attribute, and calls the host `online` if any entry is.
+  An empty array is legitimate — the list holds only currently active C2s.
 
 ### AbuseIPDB
 

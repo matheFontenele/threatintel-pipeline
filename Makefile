@@ -5,7 +5,7 @@
 -include .env
 export ABUSECH_AUTH_KEY
 
-.PHONY: install lint test collect-kev collect-threatfox silver ingest
+.PHONY: install lint test collect-kev collect-feodo collect-threatfox collect-urlhaus silver ingest
 
 install:
 	python3 -m venv .venv
@@ -20,13 +20,22 @@ test:
 collect-kev:
 	.venv/bin/python -m threatintel.collectors.kev --out data/bronze
 
+# No credential: the blocklist is public. The local guard allows one fetch per hour.
+collect-feodo:
+	.venv/bin/python -m threatintel.collectors.feodo --out data/bronze
+
 # One batch per day, 7-day window: the API rejects `days` above 7, and pulling the
 # maximum window every run keeps the fair-use volume predictable.
 collect-threatfox:
 	.venv/bin/python -m threatintel.collectors.threatfox --out data/bronze --days 7
 
+# Bronze only for now: the export columns are asserted at collection time, but the
+# silver mapping ships after one live run confirms them. Needs ABUSECH_AUTH_KEY.
+collect-urlhaus:
+	.venv/bin/python -m threatintel.collectors.urlhaus --out data/bronze
+
 silver:
 	.venv/bin/python -m threatintel.normalize.pipeline \
 		--bronze data/bronze --silver data/silver/indicators.parquet
 
-ingest: collect-kev collect-threatfox silver
+ingest: collect-kev collect-feodo collect-threatfox silver

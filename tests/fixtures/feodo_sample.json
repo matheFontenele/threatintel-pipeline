@@ -1,0 +1,50 @@
+[
+  {
+    "as_name": "EXAMPLE-AS",
+    "as_number": 64500,
+    "country": "NL",
+    "first_seen": "2026-11-01 10:00:00",
+    "hostname": "c2-one.example",
+    "ip_address": "203.0.113.10",
+    "last_online": "2026-11-23 06:00:00",
+    "malware": "Dridex",
+    "port": 443,
+    "status": "online"
+  },
+  {
+    "as_name": "EXAMPLE-AS",
+    "as_number": 64500,
+    "country": "NL",
+    "first_seen": "2026-10-15 08:00:00",
+    "hostname": null,
+    "ip_address": "203.0.113.10",
+    "last_online": "2026-11-20 12:00:00",
+    "malware": "Dridex",
+    "port": 8080,
+    "status": "offline"
+  },
+  {
+    "as_name": "EXAMPLE-AS-TWO",
+    "as_number": 64501,
+    "country": "DE",
+    "first_seen": "2026-11-10 00:00:00",
+    "hostname": "mail-gw.example",
+    "ip_address": "198.51.100.23",
+    "last_online": "2026-11-22 19:45:00",
+    "malware": "Emotet, QakBot",
+    "port": 443,
+    "status": "online"
+  },
+  {
+    "as_name": "EXAMPLE-AS-THREE",
+    "as_number": 64502,
+    "country": "US",
+    "first_seen": "2026-11-12 03:00:00",
+    "hostname": null,
+    "ip_address": "2001:db8::42",
+    "last_online": "2026-11-23 01:00:00",
+    "malware": "Pikabot",
+    "port": 4443,
+    "status": "online"
+  }
+]
