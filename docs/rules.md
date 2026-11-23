@@ -5,10 +5,10 @@ did it fire, did it not, was it inapplicable, or was there not enough data to de
 rules exist today — FP-04 (stale evidence) and FP-05 (single-source corroboration) — and both
 run over the indicators already in silver, with no enrichment and no network access.
 
-Nothing here scores or ranks yet. A rule answers "is this signal present?"; the scorer will
-later decide what the signal is worth. Keeping the two apart is what makes the ablation in
-[`methodology.md`](methodology.md) §8 possible: a rule that cannot show a marginal effect when
-removed does not justify its complexity.
+Rules do not score or rank. A rule answers "is this signal present?"; the scorer decides what
+the signal is worth and lives separately in [`scoring.md`](scoring.md). Keeping the two apart
+is what makes the ablation in [`methodology.md`](methodology.md) §8 possible: a rule that
+cannot show a marginal effect when removed does not justify its complexity.
 
 ## 1. The rule contract
 
@@ -148,7 +148,8 @@ not reproducible — publish the explicit value instead.
 
 ## 7. What is deliberately absent
 
-- **No scoring.** Rules give verdicts; weights come later and are tuned on calibration data.
+- **No calibration.** Rules give verdicts and the scorer turns them into points under a
+  versioned policy; neither is a probability, and the evaluation does not claim one yet.
 - **No `strong` strength.** The word is reserved until ablation earns it.
 - **No quality metrics yet.** The fire rate in the example above is a description of one
   snapshot, not a precision estimate. Precision, recall and suppression cost require the

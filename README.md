@@ -12,7 +12,7 @@ It is built as a portfolio project in detection / threat-intel engineering. The
 interesting part is not the ingestion — it is the evaluation: knowing where the filter
 works, where it does not, and being able to prove it.
 
-> **Status: Week 1 in progress.** The design is written (threat model, source inventory,
+> **Status: ingestion through scoring.** The design is written (threat model, source inventory,
 > evaluation protocol, decision records). Working today: four collectors feeding one silver
 > table, all run live on 2026-11-23 — CISA KEV (1,790 CVEs, 0 rejected), ThreatFox (10,392
 > IOCs over 7 days, four indicator types, `ip:port` split, credential in a header), Feodo
@@ -20,11 +20,13 @@ works, where it does not, and being able to prove it.
 > export rows, 10 unparseable URLs rejected, credential in the URL path). The URLhaus export
 > comments out its own header line, so the parser locates it by shape rather than by position.
 > On top of silver, two explainable rules run — FP-04 (stale evidence, per-type TTL) and FP-05
-> (single-source corroboration) — and emit a report reproducible from
-> `(snapshot, as_of, config_hash)` that carries ids and counts, never indicator values. The
-> snapshot holds 113,686 indicators; 122 URLs are corroborated across ThreatFox and URLhaus,
-> which is the cross-source merge the rules depend on. No scoring, no API yet, so the metrics
-> below stay empty on purpose.
+> (single-source corroboration) — and a scorer turns their findings into integer points under
+> a versioned policy, with structural caps and the reason codes that produced every point. The
+> rules report and the scoring summary are reproducible from
+> `(snapshot, as_of, config_hash)` and carry ids and counts, never indicator values. The
+> snapshot holds 115,476 indicators; 122 URLs are corroborated across ThreatFox and URLhaus,
+> which is the cross-source merge the rules depend on. No API and no evaluation against hand
+> labels yet, so the metrics below stay empty on purpose.
 
 ## Architecture
 
@@ -68,6 +70,23 @@ Full rationale, TTL table and known limits: [`docs/rules.md`](docs/rules.md). Th
 keyed by indicator id and carries counts and rates only, so it can be published even for
 feeds whose terms forbid redistributing indicator values.
 
+## Scoring
+
+`make gold` turns the rule verdicts into a ranked table. The score is **integer points under
+a versioned policy — not a probability** — and every point ships as a named reason:
+
+| Layer | Examples |
+|---|---|
+| Base by source class | `SRC_AUTHORITATIVE` +60, `SRC_COMMUNITY` +45, `SRC_UNCLASSIFIED` +30 |
+| Adjustments | `KEV_EXPLOITATION` +10, `CORROBORATED` +15, `STALE_EVIDENCE` -30 |
+| Caps (guarantees) | stale ≤ 49, single community source ≤ 69, unclassified ≤ 39 |
+| Bands | `high` ≥ 70, `medium` ≥ 40, `low` below that |
+
+Caps are not subtractions: they bound the result regardless of the weights, so a tuning pass
+cannot silently let stale evidence or a single feed reach the top band. The policy hash
+changes whenever a weight changes. Full table, worked examples and limits:
+[`docs/scoring.md`](docs/scoring.md).
+
 ## Evaluation
 
 The central artifact. Protocol in [`docs/methodology.md`](docs/methodology.md).
@@ -88,6 +107,8 @@ the cases where the filter fails.
 |---|---|
 | [`docs/threat-model.md`](docs/threat-model.md) | What this project protects, from whom, and what is out of scope |
 | [`docs/methodology.md`](docs/methodology.md) | Labeling protocol, metrics, ablation, limitations |
+| [`docs/rules.md`](docs/rules.md) | FP-04/FP-05 contract, TTLs and known limits |
+| [`docs/scoring.md`](docs/scoring.md) | Weights, caps, bands and worked examples |
 | [`docs/sources.md`](docs/sources.md) | Feeds used, terms, limits, collection cadence |
 | [`docs/decisions/`](docs/decisions/) | Short decision records with rationale |
 
@@ -137,6 +158,7 @@ make collect-threatfox  # ThreatFox 7-day batch -> data/bronze/threatfox/... (ne
 make collect-urlhaus    # URLhaus recent export -> data/bronze/urlhaus/... (needs key)
 make silver             # bronze -> data/silver/indicators.parquet, upsert by indicator id
 make rules              # FP-04/FP-05 report over silver (pass --as-of for reproducibility)
+make gold AS_OF=2026-11-23T12:00:00Z   # score into data/gold/indicators.parquet
 make ingest             # all four collectors + silver
 make test
 ```
@@ -148,8 +170,7 @@ records the last successful fetch per source and refuses a repeat inside one hou
 (`--min-interval`), because abuse.ch throttles accounts that exceed fair use. The remaining
 sources in [`docs/sources.md`](docs/sources.md) stay unimplemented until their terms row is
 verified — and note `docs/decisions/0007`: feed-derived indicator values are never published,
-so test fixtures use documentation ranges only. API, dashboard and scoring are not
-implemented yet.
+so test fixtures use documentation ranges only. API and dashboard are not implemented yet.
 
 ## Scope
 

@@ -42,7 +42,7 @@ SILVER_SCHEMA = pa.schema(
 )
 
 
-def _to_row(indicator: Indicator) -> dict[str, object]:
+def indicator_row(indicator: Indicator) -> dict[str, object]:
     return {
         "id": indicator.id,
         "type": indicator.type.value,
@@ -69,7 +69,9 @@ def write_indicators(indicators: Iterable[Indicator], path: Path) -> Path:
     Atomic because a partially written silver file is worse than a stale one: the API
     would serve a truncated dataset with no indication that it is truncated.
     """
-    rows = [_to_row(item) for item in sorted(indicators, key=lambda i: (i.type.value, i.value))]
+    rows = [
+        indicator_row(item) for item in sorted(indicators, key=lambda i: (i.type.value, i.value))
+    ]
     table = pa.Table.from_pylist(rows, schema=SILVER_SCHEMA)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -78,30 +80,29 @@ def write_indicators(indicators: Iterable[Indicator], path: Path) -> Path:
     return path
 
 
+def indicator_from_row(row: dict[str, object]) -> Indicator:
+    """Rebuild one indicator from a stored row. Shared with the gold table reader."""
+    return Indicator(
+        id=row["id"],
+        type=IndicatorType(row["type"]),
+        value=row["value"],
+        sources=[SourceRef(**ref) for ref in json.loads(row["sources_json"])],
+        source_confidence=json.loads(row["source_confidence_json"]),
+        distinct_reporters=row["distinct_reporters"],
+        tags=row["tags"] or [],
+        first_seen=row["first_seen"],
+        last_seen=row["last_seen"],
+        usage_type=row["usage_type"],
+        fp_reasons=row["fp_reasons"] or [],
+        attributes=json.loads(row["attributes_json"]),
+        ingest_version=row["ingest_version"],
+        bronze_refs=row["bronze_refs"] or [],
+    )
+
+
 def read_indicators(path: Path) -> list[Indicator]:
     """Load silver back into models. Validators run on read, so a corrupt file fails loudly."""
-    table = pq.read_table(path)
-    indicators: list[Indicator] = []
-    for row in table.to_pylist():
-        indicators.append(
-            Indicator(
-                id=row["id"],
-                type=IndicatorType(row["type"]),
-                value=row["value"],
-                sources=[SourceRef(**ref) for ref in json.loads(row["sources_json"])],
-                source_confidence=json.loads(row["source_confidence_json"]),
-                distinct_reporters=row["distinct_reporters"],
-                tags=row["tags"] or [],
-                first_seen=row["first_seen"],
-                last_seen=row["last_seen"],
-                usage_type=row["usage_type"],
-                fp_reasons=row["fp_reasons"] or [],
-                attributes=json.loads(row["attributes_json"]),
-                ingest_version=row["ingest_version"],
-                bronze_refs=row["bronze_refs"] or [],
-            )
-        )
-    return indicators
+    return [indicator_from_row(row) for row in pq.read_table(path).to_pylist()]
 
 
 def upsert_indicators(existing_path: Path, incoming: Iterable[Indicator], out_path: Path) -> Path:
@@ -125,6 +126,8 @@ def upsert_indicators(existing_path: Path, incoming: Iterable[Indicator], out_pa
 
 __all__ = [
     "SILVER_SCHEMA",
+    "indicator_from_row",
+    "indicator_row",
     "read_indicators",
     "upsert_indicators",
     "write_indicators",
