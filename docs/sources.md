@@ -28,7 +28,7 @@ documentation said when this file was written (2026-11-23)", not as current trut
 
 | # | Source | Provides | Auth | Free tier (as documented) | Planned cadence | Redistribution | Status |
 |---|---|---|---|---|---|---|---|
-| 1 | **CISA KEV** | CVEs with known exploitation in the wild | none | public JSON/CSV | daily | public domain work product — verify | `unverified` |
+| 1 | **CISA KEV** | CVEs with known exploitation in the wild | none | public JSON/CSV | daily | public domain work product — verify | `verified 2026-11-23` (endpoint + shape); redistribution still `unverified` |
 | 2 | **abuse.ch — URLhaus** | malicious URLs, payload hashes | Auth-Key (free) | bulk export + API | daily | non-commercial, attribution required — verify | `unverified` |
 | 3 | **abuse.ch — ThreatFox** | IOCs (IP/domain/URL/hash) with malware family | Auth-Key (free) | API + export; drops IOCs older than 6 months (from 2025-05-01) | daily | same as above | `unverified` |
 | 4 | **abuse.ch — Feodo Tracker** | botnet C2 IPs | Auth-Key (free) | bulk export | daily | same as above | `unverified` |
@@ -48,10 +48,17 @@ its limits make it enrichment, never bulk scoring.
 
 - Catalogue of CVEs with confirmed exploitation. Small (order of 10^3), stable identifiers,
   public JSON and CSV.
+- **Observed on 2026-11-23**: `HTTP 200`, 1,871,127 bytes, 1,790 entries, `count` field
+  agreeing with `len(vulnerabilities)`, `dateReleased` in the payload. The collector in
+  `src/threatintel/collectors/kev.py` validates exactly this shape before writing bronze,
+  so a format change fails loudly instead of corrupting the store.
 - **What it means**: exploitation observed *somewhere*, published. Not "affects you" and
   not "is being exploited right now". The scoring must say which of the two it claims.
 - Used as a priority signal (FP-10 in the plan), and — because that makes it a rule input —
   it cannot serve as a label source for its own stratum (see `methodology.md` §7).
+- Still open: whether derived scores based on KEV may be published. Treat the catalogue as
+  a public-domain US government work product, but confirm before publishing a dataset that
+  embeds it wholesale.
 
 ### abuse.ch
 

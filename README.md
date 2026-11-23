@@ -12,10 +12,12 @@ It is built as a portfolio project in detection / threat-intel engineering. The
 interesting part is not the ingestion — it is the evaluation: knowing where the filter
 works, where it does not, and being able to prove it.
 
-> **Status: Week 0 — scaffold only.** The repository currently contains the design:
-> threat model, source inventory, evaluation protocol and decision records. No
-> collectors, no scoring, no API yet. Metrics below are intentionally empty until they
-> are measured.
+> **Status: Week 1 in progress.** The design is written (threat model, source inventory,
+> evaluation protocol, decision records). Working today: the CISA KEV collector writes
+> immutable bronze, and the silver contract — identity, normalization, merge — is
+> implemented and tested end to end (1,790 CVEs mapped on 2026-11-23, 0 rejected). No
+> false-positive rules, no scoring, no API yet, so the metrics below stay empty on
+> purpose.
 
 ## Architecture
 
@@ -107,8 +109,16 @@ pip install -e ".[dev]"
 cp .env.example .env   # add your own feed credentials
 ```
 
-Collectors, API and dashboard are not implemented yet. Commands will be documented as
-each one lands.
+```bash
+make collect-kev   # CISA KEV -> data/bronze/cisa_kev/collection_date=YYYY-MM-DD/
+make silver        # bronze -> data/silver/indicators.parquet, upsert by indicator id
+make ingest        # both, in order
+make test
+```
+
+Only the KEV collector exists so far. It needs no credential; every other source in
+[`docs/sources.md`](docs/sources.md) does, and none of them ships until its terms row is
+verified. API, dashboard and scoring are not implemented yet.
 
 ## Scope
 
