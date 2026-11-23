@@ -2,8 +2,8 @@
 
 The contract is the product: consumers read indicators and aggregates over JSON, and never
 open the Parquet file or a database handle (threat model B3). The service is deliberately
-small — four endpoints, one store, no writes — because every capability added here is a
-capability a consumer will depend on.
+small — five endpoints over two tables, one store each, no writes — because every capability
+added here is a capability a consumer will depend on.
 
 Two choices keep the output honest:
 
@@ -34,6 +34,7 @@ from threatintel.api.models import (
     Health,
     Page,
     Stats,
+    VulnPage,
 )
 from threatintel.api.store import (
     Cursor,
@@ -41,10 +42,11 @@ from threatintel.api.store import (
     GoldStoreError,
     InvalidCursor,
 )
+from threatintel.api.vuln_store import VulnCursor, VulnStore
 
 logger = logging.getLogger(__name__)
 
-IndicatorTypeName = Literal["ip", "domain", "url", "hash", "cve"]
+IndicatorTypeName = Literal["ip", "domain", "url", "hash"]
 BandName = Literal["high", "medium", "low"]
 
 API_VERSION = "1.0.0"
@@ -66,21 +68,32 @@ def _error(status_code: int, code: str, message: str, **extra: Any) -> JSONRespo
     return JSONResponse(status_code=status_code, content=body)
 
 
-def create_app(gold_path: Path) -> FastAPI:
-    """Build the app around one gold file. Missing or unreadable data fails at startup."""
+def create_app(gold_path: Path, vuln_path: Path | None = None) -> FastAPI:
+    """Build the app around one run of both tables. Missing data fails at startup.
+
+    `vuln_path` defaults to `vulnerabilities.parquet` next to the gold file: the two outputs
+    are written by one scoring run and served by one process, so splitting them across
+    directories would make it possible to serve mismatched clocks.
+    """
     store = GoldStore(gold_path)
+    if vuln_path is None:
+        vuln_path = gold_path.with_name("vulnerabilities.parquet")
+    vuln_store = VulnStore(vuln_path)
 
     app = FastAPI(
         title="Threat Intel API",
         version=API_VERSION,
-        summary="Explainable, scored threat indicators.",
+        summary="Explainable, scored threat indicators, plus a vulnerability catalogue.",
         description=(
-            "Read-only API over the scored gold table. Every response carries the run "
-            "clock and both configuration hashes; see `docs/api.md` for the contract and "
-            "the security posture. Consumers never read the store directly."
+            "Read-only API over two tables from one run: ranked indicators (score, band, "
+            "reason codes) and the KEV catalogue (facts, no score). Every response carries "
+            "the run clock and, for indicators, both configuration hashes; see "
+            "`docs/api.md` for the contract and the security posture. Consumers never read "
+            "the store directly."
         ),
     )
     app.state.store = store
+    app.state.vuln_store = vuln_store
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -135,8 +148,10 @@ def create_app(gold_path: Path) -> FastAPI:
 
     @app.get("/health", response_model=Health, tags=["meta"])
     def health() -> dict[str, Any]:
-        """Liveness plus the number of indicators the process has pinned."""
-        return store.health()
+        """Liveness plus the number of rows the process has pinned, per track."""
+        payload = store.health()
+        payload.update(vuln_store.health())
+        return payload
 
     @app.get("/v1/indicators", response_model=Page, tags=["indicators"])
     def list_indicators(
@@ -190,10 +205,42 @@ def create_app(gold_path: Path) -> FastAPI:
             raise ApiError(404, "not_found", "indicator not found")
         return {"run": store.run_meta(), "indicator": indicator}
 
+    @app.get("/v1/vulnerabilities", response_model=VulnPage, tags=["vulnerabilities"])
+    def list_vulnerabilities(
+        ransomware: Annotated[bool | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        cursor: Annotated[str | None, Query(max_length=512)] = None,
+    ) -> dict[str, Any]:
+        """One page of the KEV catalogue, `date_added DESC` then `cve_id ASC`.
+
+        There is no score here on purpose. A vulnerability's priority is a function of an
+        estate this service knows nothing about, so the row carries the catalogue's facts
+        and stops; a consumer with asset context ranks them itself.
+        """
+        key = None
+        if cursor is not None:
+            try:
+                key = VulnCursor.decode(cursor)
+            except InvalidCursor as exc:
+                raise ApiError(400, "invalid_cursor", str(exc)) from exc
+
+        items, next_cursor = vuln_store.list_vulnerabilities(
+            ransomware=ransomware,
+            limit=limit,
+            cursor=key,
+        )
+        return {
+            "run": vuln_store.run_meta(),
+            "items": items,
+            "next_cursor": next_cursor,
+            "limit": limit,
+        }
+
     @app.get("/v1/stats", response_model=Stats, tags=["meta"])
     def stats() -> dict[str, Any]:
         """Band distribution, review count and reason-code counts for the whole run."""
         aggregates = store.stats()
+        aggregates["vulnerabilities"] = vuln_store.stats()
         return {"run": store.run_meta(), **aggregates}
 
     return app

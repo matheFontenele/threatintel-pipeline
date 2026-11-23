@@ -7,8 +7,14 @@ one: *how much should that signal move this indicator up the queue?* The split i
 than scattered through rule code.
 
 **What the number is not:** a probability. A score of 70 means *70 points under policy
-`2026-11-23`*, not *70% likely malicious*. No calibration has been done, and the output is
+`2026-11-23.2`*, not *70% likely malicious*. No calibration has been done, and the output is
 versioned precisely so that nobody can mistake one interpretation for the other.
+
+This document is about the **indicator** track only. CVE rows are not scored here; they are
+published as catalogue facts by the vulnerability track (§6). The policy version moved from
+`2026-11-23` to `2026-11-23.2` when the `KEV_EXPLOITATION` weight was removed with that
+split: a policy that no longer contains a term must not share a version string with results
+that were produced under it.
 
 ## 1. The policy
 
@@ -26,10 +32,9 @@ is labelled as provisional in the code.
 
 | Code | Weight | Meaning |
 |---|---|---|
-| `SRC_AUTHORITATIVE` | +60 | A curated catalogue or C2 blocklist (`cisa_kev`, `feodo`) |
+| `SRC_AUTHORITATIVE` | +60 | A curated catalogue or C2 blocklist (`feodo`; `cisa_kev` is classified authoritative but never reaches this track) |
 | `SRC_COMMUNITY` | +45 | A collaborative feed — a claim, not a finding (`threatfox`, `urlhaus`) |
 | `SRC_UNCLASSIFIED` | +30 | A feed nobody has classified; independence unknown |
-| `KEV_EXPLOITATION` | +10 | The indicator is a CVE in the KEV catalogue |
 | `FRESH_AUTHORITATIVE` | +10 | Inside its TTL *and* curated — the strongest combination |
 | `CORROBORATED` | +15 | Two or more independent sources agree |
 | `STALE_EVIDENCE` | -30 | Past the type's TTL (`FP-04_STALE` fired) |
@@ -37,10 +42,14 @@ is labelled as provisional in the code.
 | `SINGLE_COMMUNITY_SOURCE` | -10 | One community feed, alone (`FP-05` fired) |
 | `UNCLASSIFIED_SOURCE` | -15 | Source independence unknown (`insufficient_data`) |
 
+`KEV_EXPLOITATION` was removed in policy `2026-11-23.2`. It had no input: a CVE is not an
+indicator, and every CVE now leaves the track before the rules run.
+
 Notes on the signs:
 
-- **A curated source alone is not penalised.** FP-05 returns `not_applicable` for Feodo and
-  KEV, and the scorer follows that verdict rather than inventing a second opinion.
+- **A curated source alone is not penalised.** FP-05 returns `not_applicable` for an
+  authoritative source such as Feodo, and the scorer follows that verdict rather than
+  inventing a second opinion.
 - **Missing data is not clean data.** The rules distinguish `not_fired` from
   `insufficient_data`; the scorer does too, with `UNKNOWN_AGE` / `UNCLASSIFIED_SOURCE`
   instead of the positive terms.
@@ -89,7 +98,6 @@ Clock: `2026-11-23T12:00:00Z`.
 
 | Indicator | Rule verdicts | Score | Band |
 |---|---|---|---|
-| `CVE-2024-1234`, KEV | FP-04 n/a (CVE is not aged), FP-05 n/a (authoritative alone) | 60 + 10 = **70** | high |
 | `203.0.113.10`, Feodo, seen yesterday | FP-04 not fired, FP-05 n/a | 60 + 10 = **70** | high |
 | `203.0.113.10`, Feodo, seen 40 days ago | FP-04 fired, FP-05 n/a | 60 − 30 = **30** | low |
 | `203.0.113.10`, Feodo, no timestamps | FP-04 insufficient, FP-05 n/a | 60 − 10 = **50**, `needs_review` | medium |
@@ -100,24 +108,65 @@ Clock: `2026-11-23T12:00:00Z`.
 `needs_review` is set when any rule returned `insufficient_data`. It is a routing signal —
 "a human should look at the missing fact" — not a verdict about the indicator.
 
-## 6. Output: the gold table
+The ThreatFox + URLhaus row is what the 122 `medium` rows in the live run are: it is a
+*source-name* corroboration, and both feeds are operated by abuse.ch. Under the definition of
+independence in `methodology.md` §5 it is one organization, not two. The rule as implemented
+counts names; the corrigendum is planned and the live distribution is published as-is until
+it lands.
 
-Scoring reads silver and writes `data/gold/indicators.parquet` (gitignored, like all data).
-The table is silver plus the score columns: `score`, `band`, `needs_review`,
-`score_reasons_json`, `score_caps`, `policy_version`, `policy_config_hash`, and the run
-metadata `as_of` and `rules_config_hash`. Reasons are JSON so DuckDB and the API can read the
-table without the project's models. The hashes and clock are stored per row, so a row copied
-out of the table can still name the run that produced it. A table whose rows disagree about
-the run is rejected on read.
+## 6. Output: two tables from one run
 
-Rows are sorted by descending score, then type and value, so a consumer that truncates the
-scan gets the top of the queue first. The CLI summary printed to stdout carries counts only:
-bands, `needs_review`, and reason-code distribution. Like the rules report, it never carries
-an indicator value, so it is publishable under `decisions/0007`.
+Scoring reads silver and writes two files under `data/gold/` (gitignored, like all data):
 
-The gold table is **derived output**. If silver changes, gold is stale; there is no
+- `indicators.parquet` — silver plus the score columns `score`, `band`, `needs_review`,
+  `score_reasons_json`, `score_caps`, `policy_version`, `policy_config_hash`, and the run
+  metadata `as_of` and `rules_config_hash`. Reasons are JSON so DuckDB and the API can read
+  the table without the project's models. The hashes and clock are stored per row, so a row
+  copied out of the table can still name the run that produced it. A table whose rows
+  disagree about the run is rejected on read.
+- `vulnerabilities.parquet` — the KEV catalogue as facts: `cve_id`, `date_added`,
+  `due_date`, `ransomware`, vendor/product, required action, description, CWEs, notes, tags,
+  provenance, `ingest_version` and `as_of`. There is no score, no band and no priority
+  column. `write_gold` refuses a CVE row and `write_vulnerabilities` is the only writer, so
+  the two tables cannot drift into each other.
+
+Both are written by one run from one `as_of`; a catalogue stamped with a different clock
+than the scores would make a report cite two snapshots without saying so.
+
+Indicator rows are sorted by descending score, then type and value, so a consumer that
+truncates the scan gets the top of the queue first. Catalogue rows are sorted
+`date_added DESC, cve_id ASC`, and an entry with no publication date sorts last rather than
+being invented or dropped. The CLI summary printed to stdout carries counts only: bands,
+`distinct_scores`, `needs_review`, reason-code distribution, catalogue count and ransomware
+count. Like the rules report, it never carries an indicator value, so it is publishable
+under `decisions/0007`.
+
+The gold tables are **derived output**. If silver changes, gold is stale; there is no
 incremental invalidation in Phase 1 by design, because a full rescore of ~10^5 rows takes
 seconds and a half-updated score table is worse than a stale one.
+
+### 6.1 The 2026-11-23 distribution, stated rather than repaired
+
+The first run after the split produced three distinct score values over 113,686 indicators:
+
+| Band | Rows | Score | What produced it |
+|---|---|---|---|
+| `high` | 0 | ≥ 70 | nothing |
+| `medium` | 122 | 60 | `SRC_COMMUNITY 45 + CORROBORATED 15` |
+| `low` | 113,564 | 35 or 30 | single community source (35) and stale authoritative (30) |
+
+The previous run, which still scored CVEs, had 1,790 `high` rows and all of them were KEV
+entries at `60 + 10`. With the catalogue out of the track, no indicator reaches 70: the only
+authoritative rows are five Feodo C2s and all five are stale, while a community row tops out
+at `45 + 15 = 60`. `FRESH_AUTHORITATIVE` never fires. The 122 `medium` rows are ThreatFox
+URLs also present in URLhaus — two feeds, one organization. That is the *echo problem at the
+organization level*, and the pending FP-05 rewrite (count organizations, not feed names) is
+expected to make those rows `SINGLE_COMMUNITY_SOURCE` instead.
+
+**This is reported, not fixed.** Moving a threshold to manufacture a non-empty `high` band
+would hide the finding, which is that the indicator score currently has no positive signal
+of its own. The band thresholds, caps and weights are unchanged; the only policy edit is the
+removed `KEV_EXPLOITATION` term.
 
 ## 7. Reproducing a score set
 
@@ -127,26 +176,41 @@ make gold AS_OF=2026-11-23T12:00:00Z
 python -m threatintel.scoring \
   --silver data/silver/indicators.parquet \
   --out data/gold/indicators.parquet \
+  --out-vulnerabilities data/gold/vulnerabilities.parquet \
   --as-of 2026-11-23T12:00:00Z --json
 ```
 
 A published number needs `(snapshot, as_of, policy_config_hash, rules_config_hash)`. The
 summary carries the last three; the snapshot is the silver file the run read. Omitting
-`--as-of` uses the current clock and is convenient but not reproducible.
+`--as-of` uses the current clock and is convenient but not reproducible — and for URL rows
+it is not even stable: the URLhaus export window is about 30 days and the URL TTL is 30
+days, so a handful of rows cross the stale boundary *within* one collection day. The
+2026-11-23 baseline scored at 10:45 UTC had 99 stale URL rows; the same silver scored at
+00:00 UTC had none. Both are correct readings of the rule at their clock, and neither is a
+measurement of the rule's accuracy.
 
 ## 8. Known limits
 
 - **Weights are uncalibrated.** The magnitudes are hypotheses. Bands separate the queue; they
   do not estimate a base rate, and no precision/recall claim is attached to them until the
   labelled evaluation in `methodology.md` §4–§9 exists.
+- **The indicator track has no positive signal on the current snapshot.** After the split,
+  the highest score in the data is 60 and it comes from one organization corroborating
+  itself. This is the finding the split was meant to expose; it is not repaired by moving a
+  threshold.
 - **Scores are not comparable across policy versions.** A 70 under one weight table is not a
-  70 under another; the hash is the only valid comparison key.
+  70 under another; the hash is the only valid comparison key, and a removed weight also
+  bumps `POLICY_VERSION` so the labels differ too.
 - **The base term dominates.** With no enrichment (FP-01/02/08 absent), an indicator's score
   is mostly its source class and age. That is honest for the current data, and the reason
   codes make the imbalance visible rather than hiding it.
 - **Caps can mask a strong signal.** A corroborated indicator with an unknown timestamp still
   cannot be `high`. The cap is reported so a reviewer can disagree with the policy knowingly.
+  A cap that does not bind is not reported, which is why the five stale rows carry an empty
+  `score_caps` at score 30.
 - **`needs_review` is not a label.** It says a fact is missing, not that the indicator is
   suspicious.
 - **No `strong` rule strength.** The word is still reserved until the ablation earns it, so
   no rule currently contributes a `strong`-class weight.
+- **The catalogue is not ranked.** `vulnerabilities.parquet` has no score by design. A
+  consumer that wants priority supplies asset context; this project does not have one.

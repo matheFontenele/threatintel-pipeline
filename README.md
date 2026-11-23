@@ -1,35 +1,52 @@
 # Threat Intel Pipeline
 
-Turns public threat feeds into a small, ranked set of indicators worth acting on —
-with every decision explained.
+Turns public threat feeds into ranked indicators with every decision explained — and
+publishes the point where the evidence stops supporting action.
 
-Public feeds are noisy by design: they report scanning, botnets, shared VPN egress and
-legitimate crawlers with the same vocabulary they use for real attacks. This project
-normalizes indicators from several feeds, applies **explainable false-positive rules**,
-and produces a score that always ships with its reasons.
+Public threat data makes two different claims, and this project refuses to merge them.
 
-It is built as a portfolio project in detection / threat-intel engineering. The
-interesting part is not the ingestion — it is the evaluation: knowing where the filter
-works, where it does not, and being able to prove it.
+**Indicators** claim "this was malicious". That claim decays at a different rate for every
+type: an IP is reassigned, a domain expires and is re-registered, a path stops serving the
+payload, a file hash never becomes benign but does become irrelevant — and the curated feed
+prints all of it in the present tense, forever. Crowd-sourced reporting adds the other half
+of the problem: scanners, shared VPN egress and crawlers get reported with the same
+vocabulary as an attack.
 
-> **Status: ingestion through API.** The design is written (threat model, source inventory,
-> evaluation protocol, decision records). Working today: four collectors feeding one silver
-> table, all run live on 2026-11-23 — CISA KEV (1,790 CVEs, 0 rejected), ThreatFox (10,392
-> IOCs over 7 days, four indicator types, `ip:port` split, credential in a header), Feodo
-> Tracker (public, CC0, per-port entries collapsed to one IP indicator) and URLhaus (103,814
-> export rows, 10 unparseable URLs rejected, credential in the URL path). The URLhaus export
-> comments out its own header line, so the parser locates it by shape rather than by position.
-> On top of silver, two explainable rules run — FP-04 (stale evidence, per-type TTL) and FP-05
-> (single-source corroboration) — and a scorer turns their findings into integer points under
-> a versioned policy, with structural caps and the reason codes that produced every point. The
-> rules report and the scoring summary are reproducible from
-> `(snapshot, as_of, config_hash)` and carry ids and counts, never indicator values. The
-> snapshot holds 115,476 indicators; 122 URLs are corroborated across ThreatFox and URLhaus,
-> which is the cross-source merge the rules depend on. A read-only JSON API serves the scored
-> table — filtered pages, per-indicator detail, run aggregates, and the run clock plus both
-> config hashes in every data response. It is loopback by default and publishes a new run by
-> restarting, so a response can never mix two runs. Evaluation against hand labels is the next
-> milestone, so the metrics below stay empty on purpose.
+**Vulnerabilities** claim "exploitation of this CVE was observed somewhere". That is a fact
+about a catalogue, not about any reader's estate. It becomes a priority only against an asset
+inventory this project does not have, so it is published as facts and never as a score.
+
+The pipeline normalizes both, records what it can and cannot verify, applies **explainable
+false-positive rules**, and always ships the reason codes behind a rank. It is a portfolio
+project in detection / threat-intel engineering; the interesting part is not the ingestion
+but the evaluation — knowing where the filter works, where it does not, and being able to
+prove it.
+
+> **Status: two tracks through the API, no measured metrics yet.** Working today: four
+> collectors feeding one silver table, all run live on 2026-11-23 — CISA KEV (1,790 CVEs, 0
+> rejected), ThreatFox (10,392 IOCs over 7 days, four indicator types, `ip:port` split,
+> credential in a header), Feodo Tracker (public, CC0, per-port entries collapsed to one IP
+> indicator) and URLhaus (103,814 export rows, 10 unparseable URLs rejected, credential in
+> the URL path). The URLhaus export comments out its own header line, so the parser locates
+> it by shape rather than by position.
+>
+> One scoring run now writes **two tables**. The IOC track holds 113,686 indicators scored
+> under policy `2026-11-23.2`; the vulnerability track holds 1,790 catalogue entries (362
+> flagged for ransomware) as facts, with no score at all. The IOC distribution is
+> `high 0 / medium 122 / low 113,564` and only three distinct score values exist. That is
+> the result of the split, not a regression to be tuned away: the 1,790 `high` rows of the
+> previous run were all KEV entries, and once CVEs left the track nothing in the data
+> reaches 70 points. The 122 `medium` rows are ThreatFox URLs that also appear in URLhaus —
+> corroboration between two feeds run by the **same organization**, which the pending FP-05
+> rewrite (count organizations, not feed names) is expected to void. **As of this snapshot
+> the IOC track has no positive signal of its own**, and the report says so instead of moving
+> the bands until a number appears.
+>
+> A read-only JSON API serves both tables from one pinned run — filtered indicator pages,
+> per-indicator detail, a filterable vulnerability catalogue, run aggregates, and the run
+> clock plus both config hashes in every data response. It is loopback by default and
+> publishes a new run by restarting, so a response can never mix two runs. Evaluation against
+> hand labels is the next milestone, so the metrics below stay empty on purpose.
 
 ## Architecture
 
@@ -40,8 +57,10 @@ flowchart LR
     C --> D[Normalize + dedupe]
     D --> E[(Silver<br/>indicators + FP reasons)]
     E --> F[Enrichment<br/>rDNS, ASN/CDN, noise]
-    F --> G[(Gold<br/>scored + explained)]
+    F --> G[(Gold indicators<br/>scored + explained)]
+    E --> N[(Vulnerabilities<br/>KEV facts — no score)]
     G --> H[Read API<br/>FastAPI]
+    N --> H
     H --> I[Consumers<br/>their own dashboards]
     G --> M[Evaluation against labels]
     L[Hand-labeled set] --> M
@@ -57,35 +76,60 @@ flowchart LR
 5. **No feed data in the repository.** Code and schema are public; each operator brings
    their own key.
 
+## Two tracks, one run
+
+Silver holds both kinds of claim. One `make gold` partitions it:
+
+| Track | Table | What it answers | Ranked? |
+|---|---|---|---|
+| Indicators | `data/gold/indicators.parquet` | how much of a claim is this, and is it still current? | yes — score, band, reason codes |
+| Vulnerabilities | `data/gold/vulnerabilities.parquet` | what does the KEV catalogue say about this CVE? | no — facts only |
+
+A CVE never reaches the rules or the scorer. `build_tracks` splits the table, and the
+IOC-only entry point raises on CVE input rather than dropping it, so a caller cannot skip
+the split silently. The catalogue is ordered `date_added DESC, cve_id ASC` — chronology,
+not priority — because priority needs an asset inventory this project does not have.
+Ranking it anyway would produce a number that looks like it knows something about a
+reader's estate.
+
+The API exposes the same boundary: `/v1/indicators` no longer accepts `type=cve`, and
+`/v1/vulnerabilities` serves the catalogue with no `score`, `band` or `priority` field. See
+[`docs/decisions/0010`](docs/decisions/0010-indicator-and-vulnerability-tracks.md).
+
 ## False-positive rules
 
 Two rules run today over silver. Each returns a status — `fired`, `not_fired`,
 `not_applicable` or `insufficient_data` — and, only when it fires, a coarse strength:
 
-| Code | Question | Reads |
-|---|---|---|
-| `FP-04_STALE` | Is the evidence older than its type's TTL? | `first_seen` / `last_seen` |
-| `FP-05_SINGLE_SOURCE` | Does only one community feed report it? | independent source names |
+| Code | Question | Reads | State |
+|---|---|---|---|
+| `FP-04_STALE` | Is the evidence older than its type's TTL? | `first_seen` / `last_seen` | active |
+| `FP-05_SINGLE_SOURCE` | Does only one community feed report it? | independent **feed names** | active, defectively — it counts names, and abuse.ch owns ThreatFox and URLhaus |
 
-Full rationale, TTL table and known limits: [`docs/rules.md`](docs/rules.md). The report is
-keyed by indicator id and carries counts and rates only, so it can be published even for
-feeds whose terms forbid redistributing indicator values.
+A frozen catalogue maps every id that appears in the docs to what actually exists; FP-06,
+FP-09 and FP-11 were never defined, and the table says so. Full rationale, TTL table and
+known limits: [`docs/rules.md`](docs/rules.md). The report is keyed by indicator id and
+carries counts and rates only, so it can be published even for feeds whose terms forbid
+redistributing indicator values.
 
 ## Scoring
 
-`make gold` turns the rule verdicts into a ranked table. The score is **integer points under
-a versioned policy — not a probability** — and every point ships as a named reason:
+`make gold` turns the rule verdicts into a ranked indicator table and writes the
+vulnerability catalogue beside it. The score is **integer points under a versioned policy —
+not a probability** — and every point ships as a named reason:
 
 | Layer | Examples |
 |---|---|
 | Base by source class | `SRC_AUTHORITATIVE` +60, `SRC_COMMUNITY` +45, `SRC_UNCLASSIFIED` +30 |
-| Adjustments | `KEV_EXPLOITATION` +10, `CORROBORATED` +15, `STALE_EVIDENCE` -30 |
-| Caps (guarantees) | stale ≤ 49, single community source ≤ 69, unclassified ≤ 39 |
+| Adjustments | `CORROBORATED` +15, `FRESH_AUTHORITATIVE` +10, `SINGLE_COMMUNITY_SOURCE` −10, `UNKNOWN_AGE` −10, `UNCLASSIFIED_SOURCE` −15, `STALE_EVIDENCE` −30 |
+| Caps (guarantees) | stale ≤ 49, single community source ≤ 69, unknown age ≤ 69, unclassified ≤ 39 |
 | Bands | `high` ≥ 70, `medium` ≥ 40, `low` below that |
 
 Caps are not subtractions: they bound the result regardless of the weights, so a tuning pass
 cannot silently let stale evidence or a single feed reach the top band. The policy hash
-changes whenever a weight changes. Full table, worked examples and limits:
+changes whenever a weight changes, and removing a weight bumps the version string
+(`2026-11-23` → `2026-11-23.2`) so two different policies never share a label. Full table,
+worked examples and the degenerate band distribution:
 [`docs/scoring.md`](docs/scoring.md).
 
 ## Evaluation
@@ -108,7 +152,7 @@ the cases where the filter fails.
 |---|---|
 | [`docs/threat-model.md`](docs/threat-model.md) | What this project protects, from whom, and what is out of scope |
 | [`docs/methodology.md`](docs/methodology.md) | Labeling protocol, metrics, ablation, limitations |
-| [`docs/rules.md`](docs/rules.md) | FP-04/FP-05 contract, TTLs and known limits |
+| [`docs/rules.md`](docs/rules.md) | Frozen rule catalogue, FP-04/FP-05 contract, TTLs and known limits |
 | [`docs/scoring.md`](docs/scoring.md) | Weights, caps, bands and worked examples |
 | [`docs/api.md`](docs/api.md) | Read API contract, cursor semantics, errors and security posture |
 | [`docs/sources.md`](docs/sources.md) | Feeds used, terms, limits, collection cadence |
@@ -159,8 +203,8 @@ make collect-threatfox  # ThreatFox 7-day batch -> data/bronze/threatfox/... (ne
 make collect-urlhaus    # URLhaus recent export -> data/bronze/urlhaus/... (needs key)
 make silver             # bronze -> data/silver/indicators.parquet, upsert by indicator id
 make rules              # FP-04/FP-05 report over silver (pass --as-of for reproducibility)
-make gold AS_OF=2026-11-23T12:00:00Z   # score into data/gold/indicators.parquet
-make api                # serve gold read-only on 127.0.0.1:8000 (restart after make gold)
+make gold AS_OF=2026-11-23T12:00:00Z   # score indicators + write the vulnerability catalogue
+make api                # serve both tables read-only on 127.0.0.1:8000 (restart after make gold)
 make ingest             # all four collectors + silver
 make test
 ```

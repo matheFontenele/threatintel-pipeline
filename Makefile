@@ -49,12 +49,14 @@ rules:
 api:
 	.venv/bin/python -m threatintel.api --gold data/gold/indicators.parquet
 
-# Scoring adds one weight per rule finding and writes data/gold. Same reproducibility
-# rule: pass --as-of (make gold AS_OF=2026-11-23T10:30:00Z) for a published number.
+# Scoring splits silver into two outputs at one clock: ranked indicators in gold, and the
+# KEV catalogue as facts. Same reproducibility rule: pass --as-of (make gold
+# AS_OF=2026-11-23T10:30:00Z) for a published number.
 gold:
 	.venv/bin/python -m threatintel.scoring \
 		--silver data/silver/indicators.parquet \
 		--out data/gold/indicators.parquet \
+		--out-vulnerabilities data/gold/vulnerabilities.parquet \
 		$(if $(AS_OF),--as-of $(AS_OF))
 
 ingest: collect-kev collect-feodo collect-threatfox collect-urlhaus silver

@@ -21,6 +21,7 @@ from threatintel.scoring import (
     DEFAULT_WEIGHTS,
     GOLD_SCHEMA,
     ScorePolicy,
+    build_tracks,
     config_fingerprint,
     evaluate_and_score,
     parse_as_of,
@@ -59,17 +60,25 @@ def _codes(score) -> list[str]:
 # --- base weights and bands ---------------------------------------------------------------
 
 
-def test_authoritative_kev_reaches_the_top_band():
+def test_kev_is_refused_by_the_indicator_scorer():
     indicator = _indicator(
         indicator_type=IndicatorType.CVE, value="CVE-2024-1234", sources=["cisa_kev"]
     )
-    report = evaluate_and_score([indicator], as_of=NOW)
-    score = report.scored[0].score
 
-    assert _codes(score) == ["SRC_AUTHORITATIVE", "KEV_EXPLOITATION"]
-    assert score.score == 70, "60 + 10: the two documented terms, nothing implicit"
-    assert score.band == "high"
-    assert score.needs_review is False
+    with pytest.raises(ValueError, match="IOC scorer"):
+        evaluate_and_score([indicator], as_of=NOW)
+
+
+def test_build_tracks_routes_kev_out_of_the_indicator_score():
+    cve = _indicator(
+        indicator_type=IndicatorType.CVE, value="CVE-2024-1234", sources=["cisa_kev"]
+    )
+
+    tracks = build_tracks([cve, _indicator()], as_of=NOW)
+
+    assert [item.indicator.type for item in tracks.indicators.scored] == [IndicatorType.IP]
+    assert [row.cve_id for row in tracks.vulnerabilities] == ["CVE-2024-1234"]
+    assert tracks.indicators.as_of == NOW
 
 
 def test_fresh_authoritative_ip_reaches_the_top_band():
@@ -290,12 +299,52 @@ def test_gold_schema_matches_the_written_file(tmp_path):
     assert pq.read_schema(path) == GOLD_SCHEMA
 
 
+def test_gold_refuses_a_cve_row(tmp_path):
+    """A CVE in the indicator table is a routing bug, not a row to score."""
+    cve = _indicator(
+        indicator_type=IndicatorType.CVE, value="CVE-2024-1234", sources=["cisa_kev"]
+    )
+    report = score_all(evaluate([cve], as_of=NOW))
+
+    with pytest.raises(ValueError, match="must not contain CVE"):
+        write_gold(report, tmp_path / "gold.parquet")
+
+
+def test_vulnerability_table_rejects_mixed_runs(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from threatintel.scoring import read_vulnerabilities, write_vulnerabilities
+
+    rows = build_tracks(
+        [
+            _indicator(
+                indicator_type=IndicatorType.CVE, value="CVE-2024-0001", sources=["cisa_kev"]
+            ),
+            _indicator(
+                indicator_type=IndicatorType.CVE, value="CVE-2024-0002", sources=["cisa_kev"]
+            ),
+        ],
+        as_of=NOW,
+    ).vulnerabilities
+    path = write_vulnerabilities(rows, tmp_path / "vulns.parquet", as_of=NOW)
+
+    table = pq.read_table(path)
+    data = table.to_pylist()
+    data[0]["as_of"] = NOW - timedelta(days=1)
+    pq.write_table(pa.Table.from_pylist(data, schema=table.schema), path)
+
+    with pytest.raises(ValueError, match="mixes"):
+        read_vulnerabilities(path)
+
+
 # --- CLI ----------------------------------------------------------------------------------
 
 
 def test_cli_writes_gold_and_prints_counts_only(tmp_path, capsys):
     silver = tmp_path / "silver.parquet"
     gold = tmp_path / "gold.parquet"
+    vulnerabilities = tmp_path / "vulnerabilities.parquet"
     write_indicators(
         [_indicator(value="198.51.100.99", last_seen=NOW - timedelta(days=40))], silver
     )
@@ -306,6 +355,8 @@ def test_cli_writes_gold_and_prints_counts_only(tmp_path, capsys):
             str(silver),
             "--out",
             str(gold),
+            "--out-vulnerabilities",
+            str(vulnerabilities),
             "--as-of",
             "2026-11-23T12:00:00Z",
             "--json",
@@ -317,8 +368,11 @@ def test_cli_writes_gold_and_prints_counts_only(tmp_path, capsys):
     payload = json.loads(output)
     assert payload["bands"] == {"low": 1, "medium": 0, "high": 0}
     assert payload["reasons"]["STALE_EVIDENCE"] == 1
+    assert payload["distinct_scores"] == 1
+    assert payload["vulnerabilities"]["count"] == 0
     assert "198.51.100.99" not in output
     assert len(read_gold(gold).items) == 1
+    assert vulnerabilities.is_file()
 
 
 def test_cli_reports_a_missing_silver_table(tmp_path, capsys):

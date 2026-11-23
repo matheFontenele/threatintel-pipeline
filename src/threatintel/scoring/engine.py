@@ -21,7 +21,7 @@ from typing import Any
 from threatintel.fp_rules.base import Finding, RuleStatus
 from threatintel.fp_rules.corroboration import AUTHORITATIVE_SOURCES, COMMUNITY_SOURCES
 from threatintel.fp_rules.engine import RulesReport, evaluate
-from threatintel.normalize.schema import Indicator
+from threatintel.normalize.schema import Indicator, IndicatorType
 from threatintel.scoring.policy import (
     BAND_HIGH,
     BAND_LOW,
@@ -98,6 +98,84 @@ class ScoringReport:
         }
 
 
+_KEV_ATTRIBUTE_KEYS = (
+    "vendorProject",
+    "product",
+    "shortDescription",
+    "requiredAction",
+    "dueDate",
+    "knownRansomwareCampaignUse",
+    "cwes",
+    "notes",
+)
+
+
+@dataclass(frozen=True)
+class VulnRow:
+    """One catalogue entry: facts, and deliberately no score.
+
+    A vulnerability's importance is a function of an asset inventory this project does not
+    have. Ranking it anyway would produce a number that looks like priority and is really
+    the catalogue's publication order plus a source-trust constant, so this track stops at
+    the facts and leaves the judgement to a consumer that owns an estate.
+    """
+
+    indicator: Indicator
+
+    @property
+    def cve_id(self) -> str:
+        return self.indicator.value
+
+    def fact(self, key: str) -> Any:
+        return (self.indicator.attributes.get("cisa_kev") or {}).get(key)
+
+    @property
+    def ransomware(self) -> bool:
+        """The catalogue's own flag, normalised. A fact about the CVE, not about a reader."""
+        return "ransomware_campaign_use" in self.indicator.tags or (
+            str(self.fact("knownRansomwareCampaignUse") or "").strip().lower() == "known"
+        )
+
+
+@dataclass(frozen=True)
+class Tracks:
+    """Both surfaces from one clock: a scatter of claims, and a catalogue."""
+
+    indicators: ScoringReport
+    vulnerabilities: tuple[VulnRow, ...]
+
+
+def split_tracks(
+    indicators: Iterable[Indicator],
+) -> tuple[list[Indicator], list[VulnRow]]:
+    """Partition one silver read into the two tracks, preserving input order."""
+    iocs: list[Indicator] = []
+    vulns: list[VulnRow] = []
+    for indicator in indicators:
+        if indicator.type is IndicatorType.CVE:
+            vulns.append(VulnRow(indicator=indicator))
+        else:
+            iocs.append(indicator)
+    return iocs, vulns
+
+
+def build_tracks(
+    indicators: Iterable[Indicator],
+    *,
+    as_of: datetime | None = None,
+    policy: ScorePolicy = DEFAULT_POLICY,
+) -> Tracks:
+    """Score the IOC track and collect the catalogue at one clock.
+
+    One function so a run cannot stamp its two outputs with two different `as_of` values.
+    """
+    iocs, vulns = split_tracks(indicators)
+    return Tracks(
+        indicators=evaluate_and_score(iocs, as_of=as_of, policy=policy),
+        vulnerabilities=tuple(vulns),
+    )
+
+
 def _source_class(names: set[str]) -> str:
     if names & AUTHORITATIVE_SOURCES:
         return "SRC_AUTHORITATIVE"
@@ -127,9 +205,6 @@ def score_indicator(
 
     def add(code: str, detail: str) -> None:
         reasons.append(Reason(code, policy.weights[code], detail))
-
-    if "cisa_kev" in names:
-        add("KEV_EXPLOITATION", "listed in the KEV catalogue")
 
     aging = findings.get("FP-04_STALE")
     if aging is not None and aging.status is RuleStatus.FIRED:
@@ -225,8 +300,18 @@ def evaluate_and_score(
     as_of: datetime | None = None,
     policy: ScorePolicy = DEFAULT_POLICY,
 ) -> ScoringReport:
-    """Run the rules and the scorer at one clock. The supported entry point."""
-    report = evaluate(indicators, as_of=as_of)
+    """Run the rules and the scorer at one clock. The supported entry point.
+
+    Refuses CVE input. A catalogue entry has no maliciousness to score, and silently
+    dropping it here would hide the caller that skipped the track split.
+    """
+    items = list(indicators)
+    cves = sum(1 for item in items if item.type is IndicatorType.CVE)
+    if cves:
+        raise ValueError(
+            f"{cves} CVE indicators reached the IOC scorer; use build_tracks() instead"
+        )
+    report = evaluate(items, as_of=as_of)
     return score_all(report, policy=policy)
 
 

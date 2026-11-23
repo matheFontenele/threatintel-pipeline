@@ -247,6 +247,7 @@ class GoldStore:
         band_rows = self._rows("SELECT band, count(*) AS n FROM gold GROUP BY band")
         counts = {row["band"]: row["n"] for row in band_rows}
         review = self._rows("SELECT count(*) AS n FROM gold WHERE needs_review")
+        distinct = self._rows("SELECT count(DISTINCT score) AS n FROM gold")[0]["n"]
         reason_rows = self._rows(
             """
             SELECT json_extract_string(reason.value, '$.code') AS code, count(*) AS n
@@ -257,6 +258,7 @@ class GoldStore:
         )
         return {
             "bands": {band: counts.get(band, 0) for band in ("high", "medium", "low")},
+            "distinct_scores": distinct,
             "needs_review": review[0]["n"],
             "reasons": {row["code"]: row["n"] for row in reason_rows},
         }

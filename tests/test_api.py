@@ -22,9 +22,11 @@ from threatintel.api.store import GoldStoreError
 from threatintel.normalize.schema import Indicator, IndicatorType, SourceRef
 from threatintel.scoring import (
     DEFAULT_POLICY,
+    build_tracks,
     config_fingerprint,
     evaluate_and_score,
     write_gold,
+    write_vulnerabilities,
 )
 
 NOW = datetime(2026, 11, 23, 12, 0, tzinfo=UTC)
@@ -36,6 +38,8 @@ def _indicator(
     sources: list[str],
     *,
     last_seen: datetime | None = None,
+    first_seen: datetime | None = None,
+    tags: list[str] | None = None,
 ) -> Indicator:
     return Indicator.build(
         type=indicator_type,
@@ -43,12 +47,13 @@ def _indicator(
         sources=[SourceRef(name=name, last_seen=last_seen) for name in sources],
         ingest_version="0.1.0",
         last_seen=last_seen,
+        first_seen=first_seen,
+        tags=list(tags or []),
     )
 
 
 def _fixture_indicators() -> list[Indicator]:
     return [
-        _indicator(IndicatorType.CVE, "CVE-2024-0001", ["cisa_kev"]),
         _indicator(
             IndicatorType.IP, "203.0.113.10", ["feodo"], last_seen=NOW - timedelta(days=1)
         ),
@@ -76,10 +81,35 @@ def _fixture_indicators() -> list[Indicator]:
     ]
 
 
+def _fixture_vulnerabilities() -> list[Indicator]:
+    """Three catalogue rows: two dated, one undated, one flagged for ransomware."""
+    return [
+        _indicator(
+            IndicatorType.CVE,
+            "CVE-2024-0001",
+            ["cisa_kev"],
+            first_seen=NOW - timedelta(days=1),
+            tags=["kev", "ransomware_campaign_use"],
+        ),
+        _indicator(
+            IndicatorType.CVE,
+            "CVE-2024-0002",
+            ["cisa_kev"],
+            first_seen=NOW - timedelta(days=2),
+            tags=["kev"],
+        ),
+        _indicator(IndicatorType.CVE, "CVE-2024-0003", ["cisa_kev"], tags=["kev"]),
+    ]
+
+
 @pytest.fixture
 def gold_path(tmp_path):
-    report = evaluate_and_score(_fixture_indicators(), as_of=NOW)
-    return write_gold(report, tmp_path / "gold.parquet")
+    tracks = build_tracks(_fixture_indicators() + _fixture_vulnerabilities(), as_of=NOW)
+    gold = write_gold(tracks.indicators, tmp_path / "gold.parquet")
+    write_vulnerabilities(
+        tracks.vulnerabilities, tmp_path / "vulnerabilities.parquet", as_of=NOW
+    )
+    return gold
 
 
 @pytest.fixture
@@ -95,7 +125,7 @@ def test_health_reports_the_pinned_row_count(client):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "indicators": 6}
+    assert response.json() == {"status": "ok", "indicators": 5, "vulnerabilities": 3}
 
 
 def test_root_points_at_the_documented_surfaces(client):
@@ -108,6 +138,7 @@ def test_openapi_is_served_with_the_versioned_paths(client):
     document = client.get("/openapi.json").json()
     assert "/v1/indicators" in document["paths"]
     assert "/v1/indicators/{indicator_id}" in document["paths"]
+    assert "/v1/vulnerabilities" in document["paths"]
     assert "/v1/stats" in document["paths"]
 
 
@@ -126,18 +157,17 @@ def test_list_is_ordered_by_score_then_id(client):
     items = client.get("/v1/indicators").json()["items"]
 
     scores = [item["score"] for item in items]
-    assert scores == [70, 70, 60, 35, 15, 5]
+    assert scores == [70, 60, 35, 15, 5]
     assert scores == sorted(scores, reverse=True)
-    assert len({item["id"] for item in items}) == 6
+    assert len({item["id"] for item in items}) == 5
 
 
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
-        ("type=cve", 1),
-        ("band=high", 2),
+        ("band=high", 1),
         ("band=low", 3),
-        ("min_score=60", 3),
+        ("min_score=60", 2),
         ("max_score=35", 3),
         ("reason=STALE_EVIDENCE", 1),
         ("source=feodo", 1),
@@ -151,6 +181,14 @@ def test_filters_narrow_the_page(client, query, expected):
     assert len(body["items"]) == expected
 
 
+def test_a_cve_is_not_an_indicator_any_more(client):
+    """The type left the endpoint, so it fails validation instead of returning nothing."""
+    response = client.get("/v1/indicators?type=cve")
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
 def test_a_page_carries_the_run_metadata(client):
     body = client.get("/v1/indicators?limit=1").json()
 
@@ -159,7 +197,7 @@ def test_a_page_carries_the_run_metadata(client):
     assert run["policy_version"] == DEFAULT_POLICY.version
     assert run["policy_config_hash"] == config_fingerprint(DEFAULT_POLICY)
     assert run["rules_config_hash"]
-    assert run["indicators"] == 6
+    assert run["indicators"] == 5
     assert body["limit"] == 1
     assert body["next_cursor"]
 
@@ -180,7 +218,7 @@ def test_cursor_pagination_covers_every_row_exactly_once(client):
             break
 
     assert pages == 3
-    assert len(seen) == len(set(seen)) == 6
+    assert len(seen) == len(set(seen)) == 5
 
 
 def test_the_cursor_does_not_embed_an_indicator_value(client):
@@ -197,21 +235,21 @@ def test_the_cursor_does_not_embed_an_indicator_value(client):
 
 
 def test_detail_returns_reasons_sources_and_provenance(client):
-    items = client.get("/v1/indicators?type=cve").json()["items"]
+    items = client.get("/v1/indicators?source=feodo").json()["items"]
     indicator_id = items[0]["id"]
 
     body = client.get(f"/v1/indicators/{indicator_id}").json()
     indicator = body["indicator"]
 
-    assert indicator["value"] == "CVE-2024-0001"
+    assert indicator["value"] == "203.0.113.10"
     assert [reason["code"] for reason in indicator["reasons"]] == [
         "SRC_AUTHORITATIVE",
-        "KEV_EXPLOITATION",
+        "FRESH_AUTHORITATIVE",
     ]
     assert indicator["attributes"] == {}
-    assert indicator["sources"][0]["name"] == "cisa_kev"
+    assert indicator["sources"][0]["name"] == "feodo"
     assert indicator["policy_config_hash"] == config_fingerprint(DEFAULT_POLICY)
-    assert body["run"]["indicators"] == 6
+    assert body["run"]["indicators"] == 5
 
 
 def test_unknown_id_is_a_stable_404(client):
@@ -227,20 +265,22 @@ def test_unknown_id_is_a_stable_404(client):
 def test_stats_match_the_fixture(client):
     body = client.get("/v1/stats").json()
 
-    assert body["bands"] == {"high": 2, "medium": 1, "low": 3}
+    assert body["bands"] == {"high": 1, "medium": 1, "low": 3}
+    assert body["distinct_scores"] == 5
     assert body["needs_review"] == 1
     assert body["reasons"] == {
         "CORROBORATED": 1,
         "FRESH_AUTHORITATIVE": 1,
-        "KEV_EXPLOITATION": 1,
         "SINGLE_COMMUNITY_SOURCE": 2,
-        "SRC_AUTHORITATIVE": 2,
+        "SRC_AUTHORITATIVE": 1,
         "SRC_COMMUNITY": 3,
         "SRC_UNCLASSIFIED": 1,
         "STALE_EVIDENCE": 1,
         "UNCLASSIFIED_SOURCE": 1,
     }
-    assert body["run"]["indicators"] == 6
+    assert body["vulnerabilities"]["count"] == 3
+    assert body["vulnerabilities"]["ransomware"] == 1
+    assert body["run"]["indicators"] == 5
 
 
 # --- input validation --------------------------------------------------------------------
@@ -283,6 +323,61 @@ def test_a_cursor_with_a_score_outside_the_band_space_is_a_400(client):
     assert response.json()["error"]["code"] == "invalid_cursor"
 
 
+# --- the vulnerability track -------------------------------------------------------------
+
+
+def test_vulnerabilities_are_catalogue_ordered_and_carry_no_score(client):
+    body = client.get("/v1/vulnerabilities").json()
+
+    assert [item["cve_id"] for item in body["items"]] == [
+        "CVE-2024-0001",
+        "CVE-2024-0002",
+        "CVE-2024-0003",
+    ]
+    assert body["run"]["vulnerabilities"] == 3
+    for item in body["items"]:
+        assert "score" not in item
+        assert "band" not in item
+
+
+def test_an_undated_cve_sorts_last_and_is_not_dropped(client):
+    items = client.get("/v1/vulnerabilities").json()["items"]
+
+    assert items[-1]["cve_id"] == "CVE-2024-0003"
+    assert items[-1]["date_added"] is None
+
+
+def test_vulnerability_pagination_walks_every_row_once(client):
+    seen: list[str] = []
+    cursor = None
+    while True:
+        url = "/v1/vulnerabilities?limit=2"
+        if cursor:
+            url += f"&cursor={cursor}"
+        body = client.get(url).json()
+        seen.extend(item["cve_id"] for item in body["items"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+
+    assert seen == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"]
+
+
+def test_the_ransomware_filter_reads_the_catalogue_flag(client):
+    items = client.get("/v1/vulnerabilities?ransomware=true").json()["items"]
+
+    assert [item["cve_id"] for item in items] == ["CVE-2024-0001"]
+
+
+def test_a_cursor_from_the_other_endpoint_is_rejected(client):
+    indicator_cursor = client.get("/v1/indicators?limit=2").json()["next_cursor"]
+
+    response = client.get(f"/v1/vulnerabilities?cursor={indicator_cursor}")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_cursor"
+
+
 # --- the pinned snapshot -----------------------------------------------------------------
 
 
@@ -291,14 +386,19 @@ def test_the_store_serves_the_run_it_started_with(gold_path):
 
     replaced = write_gold(evaluate_and_score([], as_of=NOW + timedelta(days=1)), gold_path)
 
-    assert test_client.get("/health").json()["indicators"] == 6
+    assert test_client.get("/health").json()["indicators"] == 5
     assert TestClient(create_app(replaced)).get("/health").json()["indicators"] == 0
 
 
 def test_an_empty_gold_table_is_a_valid_snapshot(tmp_path):
     empty = write_gold(evaluate_and_score([], as_of=NOW), tmp_path / "empty.parquet")
+    write_vulnerabilities([], tmp_path / "vulnerabilities.parquet", as_of=NOW)
     with TestClient(create_app(empty)) as client:
-        assert client.get("/health").json() == {"status": "ok", "indicators": 0}
+        assert client.get("/health").json() == {
+            "status": "ok",
+            "indicators": 0,
+            "vulnerabilities": 0,
+        }
 
         page = client.get("/v1/indicators").json()
         assert page["items"] == []
@@ -308,12 +408,19 @@ def test_an_empty_gold_table_is_a_valid_snapshot(tmp_path):
 
         stats = client.get("/v1/stats").json()
         assert stats["bands"] == {"high": 0, "medium": 0, "low": 0}
+        assert stats["distinct_scores"] == 0
         assert stats["reasons"] == {}
+        assert stats["vulnerabilities"]["count"] == 0
 
 
 def test_a_missing_gold_table_fails_at_startup(tmp_path):
     with pytest.raises(FileNotFoundError, match="gold table not found"):
         create_app(tmp_path / "absent.parquet")
+
+
+def test_a_missing_catalogue_table_fails_at_startup(gold_path, tmp_path):
+    with pytest.raises(FileNotFoundError, match="vulnerability table not found"):
+        create_app(gold_path, tmp_path / "absent-vulnerabilities.parquet")
 
 
 def test_a_gold_table_that_mixes_runs_fails_at_startup(gold_path, tmp_path):

@@ -1,6 +1,6 @@
 # 0009 — Read-only API boundary: one pinned run, keyset pages, no auth in Phase 1
 
-- Status: accepted
+- Status: accepted (amended by 0010: a second table and a fifth surface)
 - Date: 2026-11-23
 - Supersedes: —
 

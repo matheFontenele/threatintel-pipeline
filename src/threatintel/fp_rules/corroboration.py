@@ -14,9 +14,12 @@ Two deliberate limits keep the rule honest:
   produces `insufficient_data`, so adding a feed forces the classification decision to be
   made explicitly rather than silently benefiting from the default.
 
-Known limitation, recorded so it is not discovered later: with the current source mix this
-rule is close to "the indicator came from ThreatFox". It stays `weak` on that basis, and
-`docs/methodology.md` §8 ablation is what must justify it once the source mix widens.
+Known defect, recorded in `docs/rules.md` §3: the rule counts *feed names*, and every
+community feed in the current source set is operated by abuse.ch (ThreatFox, URLhaus, and
+Feodo Tracker on the authoritative side). The 122 rows that reach `not_fired` on the
+2026-11-23 snapshot are therefore one organization, not two. Counting organizations is the
+fix; until a second independent feed exists the corrected rule would have no bit, which is
+itself the finding.
 """
 
 from __future__ import annotations

@@ -91,16 +91,60 @@ class BandCounts(BaseModel):
     low: int
 
 
+class VulnerabilitySummary(BaseModel):
+    """One catalogue entry. No score, no band: this track publishes facts only."""
+
+    id: str
+    cve_id: str
+    date_added: datetime | None = None
+    due_date: datetime | None = None
+    ransomware: bool
+    vendor_project: str | None = None
+    product: str | None = None
+    required_action: str | None = None
+    short_description: str | None = None
+    cwes: list[str]
+    notes: str | None = None
+    tags: list[str]
+    sources: list[SourceRefOut]
+    bronze_refs: list[str]
+    ingest_version: str
+
+
+class VulnRunMeta(BaseModel):
+    """The clock and the row count. A catalogue has no policy to hash."""
+
+    as_of: datetime | None
+    vulnerabilities: int
+
+
+class VulnPage(BaseModel):
+    run: VulnRunMeta
+    items: list[VulnerabilitySummary]
+    next_cursor: str | None
+    limit: int
+
+
+class VulnerabilityStats(BaseModel):
+    count: int
+    ransomware: int
+    earliest_date_added: datetime | None = None
+    latest_date_added: datetime | None = None
+
+
 class Stats(BaseModel):
     run: RunMeta
     bands: BandCounts
+    distinct_scores: int
     needs_review: int
     reasons: dict[str, int]
+    vulnerabilities: VulnerabilityStats
 
 
 class Health(BaseModel):
     status: str
     indicators: int
+    vulnerabilities: int
 
 
 class ErrorBody(BaseModel):

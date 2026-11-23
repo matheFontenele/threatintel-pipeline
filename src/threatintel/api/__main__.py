@@ -26,6 +26,12 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("data/gold/indicators.parquet"),
         help="scored table to serve (copied into memory at startup)",
     )
+    parser.add_argument(
+        "--vulnerabilities",
+        type=Path,
+        default=Path("data/gold/vulnerabilities.parquet"),
+        help="catalogue table to serve (copied into memory at startup)",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
@@ -36,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"gold table not found: {args.gold}", file=sys.stderr)
         print("run `make gold AS_OF=...` first", file=sys.stderr)
         return 1
+    if not args.vulnerabilities.is_file():
+        print(f"vulnerability table not found: {args.vulnerabilities}", file=sys.stderr)
+        print("run `make gold AS_OF=...` first", file=sys.stderr)
+        return 1
     if args.host not in LOOPBACK_HOSTS:
         print(
             f"warning: no authentication in Phase 1; binding {args.host} puts every "
@@ -44,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        app = create_app(args.gold)
+        app = create_app(args.gold, args.vulnerabilities)
     except GoldStoreError as exc:
         print(f"cannot serve gold: {exc}", file=sys.stderr)
         return 1

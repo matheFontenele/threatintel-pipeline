@@ -5,8 +5,9 @@ often a residential address by June. The TTLs here are judgement calls and are v
 a policy, not scattered as constants: changing one changes every score, so it must show up
 in the config fingerprint.
 
-CVE is deliberately exempt. KEV is a catalogue of *exploitation*, not a time-decaying
-indicator, and aging it would silently drop the only non-IP type the pipeline has.
+CVE is deliberately exempt, because it is not in this track at all (`decisions/0010`): the
+KEV catalogue is published as facts, and a CVE that arrives here is a routing bug. The rule
+reports `not_applicable` for it instead of inventing an age.
 """
 
 from __future__ import annotations

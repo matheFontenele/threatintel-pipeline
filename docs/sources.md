@@ -33,14 +33,18 @@ documentation said when this file was written (2026-11-23)", not as current trut
 | 3 | **abuse.ch — ThreatFox** | IOCs (IP/domain/URL/hash) with malware family | Auth-Key in `Auth-Key` header (free) | `POST` batch query, `days` 1–7; drops IOCs older than 6 months (from 2025-05-01) | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + endpoint); collector + normalizer implemented; live run: 10,392 IOCs over 7 days |
 | 4 | **abuse.ch — Feodo Tracker** | botnet C2 IPs | **none** — public JSON | no key, no documented limit; still one fetch per hour locally | daily | **CC0, publishable** (§3.4) — see `decisions/0007` | `verified 2026-11-23` (endpoint + shape); collector + normalizer implemented |
 | 5 | **abuse.ch — MalwareBazaar** | malware samples, hashes | Auth-Key (free) | API | weekly, metadata only | same as above | `unverified` |
-| 6 | **AbuseIPDB** | crowd-sourced IP abuse reports, confidence score, usage type, blacklist | API key (free tier) | low daily quota; blacklist capped (~10k entries reported) | daily blacklist | restricted — check explicitly | `unverified` |
-| 7 | **GreyNoise Community** | IP classification: `noise`, `RIOT` | API key | very low rate limit | on-demand, ≤ tens of IPs per run | check | `unverified` |
+| 6 | **AbuseIPDB** | crowd-sourced IP abuse reports, confidence score, usage type, blacklist | API key (free tier) | docs list `check` 1,000/day and `blacklist` 5/day, blacklist cap 10,000; per-minute limit not documented; free-tier mapping to the "Standard" plan **unconfirmed** | daily blacklist, `check` on a sample | **terms unconfirmed** — treat per-IP data as non-publishable | `unverified` (documented limits read 2026-11-23; terms page 404 at review time) |
+| 7 | **GreyNoise Community** | IP classification: `noise`, `RIOT` | API key | 50 searches/week — severe | on-demand, ≤ tens of IPs per run | **unconfirmed**; evaluation-evidence use not documented either | `unverified` |
 | 8 | **NVD** | CVE metadata, CVSS | optional key | 5 req/30 s without key, higher with | weekly, CVE metadata only | public domain | `unverified` |
 | 9 | **OSV** | package vulnerabilities | none | query API | on-demand | CC-BY-4.0 style — verify | `unverified` |
+| 10 | **Tranco** | top-1M domain popularity, daily list with permanent ids | none | one million domains, updated daily by 00:00 UTC; no documented download-frequency limit | daily pinned list id | **unconfirmed** — cite the list id, do not commit the list | `unverified` |
 
-Ingestion order is deliberate: 1 → 2/3/4 → 6 → 7. KEV first because it is small,
-authoritative, credential-free and immediately useful for a demo. GreyNoise last because
-its limits make it enrichment, never bulk scoring.
+Ingestion order is deliberate: 1 → 2/3/4 → 6 → 10 → 7. KEV first because it is small,
+authoritative, credential-free, and it feeds the vulnerability track instead of the scorer.
+AbuseIPDB (6) is the first source that could break the single-organization monopoly on
+reporting, so it precedes the rules that count organizations. Tranco (10) is an annotation,
+not a feed, and comes after there is something to annotate. GreyNoise (7) is last because its
+limits make it enrichment, never bulk scoring.
 
 ## Per-source notes
 
@@ -53,9 +57,11 @@ its limits make it enrichment, never bulk scoring.
   `src/threatintel/collectors/kev.py` validates exactly this shape before writing bronze,
   so a format change fails loudly instead of corrupting the store.
 - **What it means**: exploitation observed *somewhere*, published. Not "affects you" and
-  not "is being exploited right now". The scoring must say which of the two it claims.
-- Used as a priority signal (FP-10 in the plan), and — because that makes it a rule input —
-  it cannot serve as a label source for its own stratum (see `methodology.md` §7).
+  not "is being exploited right now".
+- **Where it goes**: the vulnerability track, as catalogue facts with no score
+  (`decisions/0010`). It no longer contributes to any indicator score, so it is also a
+  legitimate label source — a CVE's KEV status is a fact rather than a model output, and
+  FP-10 is retired from the IOC track.
 - Still open: whether derived scores based on KEV may be published. Treat the catalogue as
   a public-domain US government work product, but confirm before publishing a dataset that
   embeds it wholesale.
@@ -140,12 +146,23 @@ Operational notes:
   `last_online` is empty for 2,332 rows; `dateadded` spans roughly 30 days
   (oldest 2026-10-23 21:02 UTC). Ten rows carry URLs the normalizer rejects (unsupported
   scheme or no host); they are rejected individually, not fatally. 103,804 unique normalized
-  URLs survive, and **122 of ThreatFox's 494 URLs are corroborated exactly**, which is what
-  gives FP-05 something to work with.
+  URLs survive, and **122 of ThreatFox's 494 URLs are corroborated exactly**. Because
+  ThreatFox and URLhaus are both abuse.ch properties, that overlap is not independent
+  corroboration; it is the defect `rules.md` §3 records, and it is the whole `medium` band of
+  the current run.
 - Because the recent-URL window is about 30 days and the URL TTL is 30 days, the oldest tail
-  of the export sits exactly on the FP-04 boundary. A live report fires FP-04 on that tail
-  (50 URLs older than 30 days at the 2026-11-23 snapshot). That is the rule doing its job,
-  not a defect: the feed keeps serving a URL after this project's evidence window closes.
+  of the export sits exactly on the FP-04 boundary, and how many rows cross it depends on the
+  hour of the run. The 2026-11-23 snapshot scored at 10:45 UTC had 99 stale URL rows; the
+  same silver scored at 00:00 UTC had none. Both are correct readings of the rule at their
+  clock, and neither is a measurement of the rule's accuracy. A rule whose firing count moves
+  by 99 rows inside one day is a rule whose *evaluation* needs a fixed clock.
+- **A second export changes that for `url`.** URLhaus documents a **full dump** containing
+  URLs that are either actively distributing malware or were added within the past **90
+  days**, alongside the 30-day `recent.csv`. The full dump is not a historical archive — it is
+  still one rolling window — but a 90-day window against a 30-day TTL puts a large, stable
+  population past the boundary. That makes FP-04's mechanism measurable for `url` without
+  waiting 35 days, and it is the reason the full dump is the planned input for the next
+  collection change. The 30-day export stays available for comparisons.
 - The normalizer maps one row to one URL indicator. `url_status`, `threat` and `reporter`
   are attributes; tags combine the `tags` column with `threat`; the submitter stays inside
   the `reporter` attribute and `distinct_reporters` remains 1, because URLhaus is one feed
@@ -163,17 +180,79 @@ Operational notes:
   the 2026-11-23 snapshot every entry's `last_online` was months old, which is exactly what
   FP-04 exists to surface.
 
+### Historical depth (unconfirmed)
+
+The pipeline needs multi-day history to evaluate an ageing rule, and the providers do not
+offer it:
+
+- **ThreatFox** serves a 1–7 day query window and removes IOCs older than six months. No
+  public historical snapshot archive was found — not from abuse.ch and not from a credible
+  third party whose licence and provenance could be cited.
+- **URLhaus** regenerates its exports every five minutes over rolling windows (30 days,
+  90 days, active-only). No archive of past windows was found.
+- A third-party mirror may exist; importing one would require confirmed provenance and
+  licence, and **none was confirmed**. The honest position is that continuity of evidence is
+  something this project has to create by collecting on a schedule and pinning each
+  collection, not something it can download.
+- Consequence for the roadmap: FP-04's *mechanism* is tested with a synthetic multi-day
+  fixture; its *measurement* waits until the project has collected enough days itself, or
+  until a licence-clean archive is found and recorded here.
+
 ### AbuseIPDB
 
-- Crowd-sourced: confidence score is a function of reports, not of ground truth. A single
+Documented 2026-11-23 at <https://docs.abuseipdb.com/>. The site terms link returned 404 at
+review time, so **every statement about permission is unconfirmed**; only endpoint shapes and
+documented quotas are recorded here.
+
+- Crowd-sourced: the confidence score is a function of reports, not of ground truth. A single
   reporter can move an IP; a shared VPN egress accumulates reports from many unrelated
-  incidents.
-- Free tier is small. Use the **blacklist** endpoint (one request, many indicators), not
-  per-IP checks, for anything resembling bulk.
+  incidents. `numDistinctUsers` is the closest the API comes to saying how many humans are
+  behind the score, and it is still not independence.
+- Limits (documented, plan-specific): `check` 1,000 requests/day, `blacklist` 5 requests/day,
+  blacklist `limit` capped at 10,000. A per-minute limit is not documented. The documentation
+  names a "Standard" tier and does not state that it equals the free tier.
+- Fields on `check`: `abuseConfidenceScore`, `usageType`, `domain`, `isWhitelisted`,
+  `numDistinctUsers`, `totalReports`, `lastReportedAt`, and `reports[]` only with `verbose`.
+  `blacklist` returns IP, score and last-report time — no reports array.
+- **Batch before per-item, as the policy says.** The blacklist is one request for many
+  indicators; `check` is for a deliberate sample, not for the population.
 - `usage_type` (residential / datacenter / VPN) is genuinely useful for FP-07 and is not
-  available from most other free sources.
+  available from most other free sources. It is the main reason this source is on the list.
+- **Planned role: baseline comparator, not scoring input.** If the source lands, its
+  `abuseConfidenceScore` is evaluated as a competing score — "how much precision does this
+  pipeline add over the number the source already publishes?" — and is not a weight in the
+  policy. A feed's own confidence in its own reports is exactly the kind of self-referential
+  input `methodology.md` §7 rules out as a label.
 - **Redistribution is the open question.** The score may be publishable; the report list
-  probably is not. Decide by reading the terms, record the date and the conclusion.
+  probably is not. Nothing from this source is committed or published until the terms are
+  read and the conclusion recorded in the status column above.
+
+### Tranco
+
+Documented 2026-11-23 at <https://tranco-list.eu/>.
+
+- One million domains, updated daily and available by 00:00 UTC. Lists have **permanent ids**,
+  and past versions are retrievable, which is what makes a popularity check reproducible:
+  pin the id, record it in the run manifest, and the same list can be fetched again.
+- Download frequency is not restricted in the documentation. The pipeline still fetches once
+  per scoring run and caches the file.
+- **Licence/redistribution unconfirmed.** Cite the list id; do not commit the list. A check
+  against it can be published as a boolean per domain only if the licence permits derived
+  output — the conservative reading is that it does not, so a Tranco-derived annotation has
+  to be reported as a rule outcome, not as a copied rank.
+- **Asymmetry that motivates the planned rule.** For a `domain` indicator, the unit is the
+  whole name, so popularity argues the *domain* is benign and someone reported a malicious
+  URL hosted on it. For a `url` indicator, the unit is the path, so a popular host and a
+  malicious path can coexist: the finding is **`collateral_risk`**, an annotation, and it
+  does not lower the score. A single popularity rule applied to both types would either
+  suppress real malicious paths on popular hosts or fail to suppress compromised-domain
+  noise.
+- Provider-side evidence that the asymmetry is real: URLhaus publishes RPZ and hostfile
+  variants that **exclude hostnames under the Tranco top-1M**, to reduce false positives. That
+  is an operator choosing a different trade-off for the same data, and it is worth citing
+  rather than reinventing.
+- This is **not** a defined rule. `FP-11` is not in the repository; see the frozen catalogue
+  in [`rules.md`](rules.md).
 
 ### GreyNoise Community
 

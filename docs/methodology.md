@@ -48,20 +48,89 @@ either brilliant or useless depending on threshold, because most of a public fee
 malicious-but-irrelevant. Keeping them apart is what lets the report say "we removed 71%
 of the volume and lost 4 points of recall on what matters".
 
+### 3.1 Two taxonomies, one mapping
+
+Four labels are needed to label honestly; three are needed to report honestly. The report
+publishes three headline labels and the mapping, because a reader wants to know whether the
+system is wrong, not how it is wrong:
+
+| Internal label | Headline label | In the denominator |
+|---|---|---|
+| `malicious` | `threat` | yes |
+| `benign` | `false_positive_or_collateral` | yes |
+| `noise` | `false_positive_or_collateral` | yes |
+| `unclear` | `unverifiable` | **no** |
+
+`unverifiable` is excluded from the denominator, not counted as either outcome. A system that
+cannot decide has not answered the question, and silently scoring it as a false positive (or
+as a true positive) would invent evidence.
+
+The mapping is lossy on purpose and the loss is reported: `noise` and `benign` collapse into
+one headline number, so a rule that suppresses scanners and a rule that suppresses a
+compromised legitimate site look equally good at headline level. That is why the per-rule
+ablation in §8 is broken down by internal label — the 2×2 headline table is the summary, not
+the evidence.
+
+**Naming.** The operator's review workflow names the three headline labels in Portuguese
+(`ameaça`, `fp_ou_colateral`, `não_verificável`); this document and any published report use
+the English names above. They are the same three rows, so a label file does not have to be
+rewritten to be counted.
+
 ## 4. Sampling
 
-Stratified by `(source, type)`, with a floor per cell, seeded, drawn from the snapshot
-under evaluation. Target 200–300 items; below ~150 the confidence intervals are too wide
-to support any claim, and the report says so instead of quietly reporting a point
-estimate.
+Stratified by `(source, type, band, rule state)`, with a floor per cell, seeded, drawn from
+the snapshot under evaluation. Stratifying by band and rule state — not only by source and
+type — is what makes an ablation possible at all: the cells a rule touches must be populated.
+
+### 4.1 How many items, and what they can support
+
+The honest arithmetic first, because it constrains what the report may claim:
+
+- a 60/40 split at 300 items leaves ~120 test items;
+- if corroborated or stale items are 1–2% of the population and are oversampled to ~15% of
+  the sample, a test cell has roughly 15–20 items;
+- a Wilson 95% interval at n = 40 and p = 0.9 is about **±9 percentage points**.
+
+So:
+
+- **200–300 items** support the three headline numbers and **3–4 pre-declared aggregates**,
+  each reported with its interval. Nothing finer. A per-rule × per-type table at that size is
+  noise dressed as precision.
+- **400–600 items** are required before a per-rule or per-cell claim is published, and even
+  then only with intervals and exact denominators.
+- Below ~150 the report publishes the protocol and the interval width, and states that the
+  sample does not support a precision claim. It does not publish a point estimate.
+
+The choice is made **before** the test set is touched, and it is written into the report
+header. Deciding the sample size after seeing which cells look interesting is the same
+practice as tuning on the test set.
+
+### 4.2 Post-stratification weights are mandatory
+
+Oversampling hard cases makes the sample unrepresentative by construction. Without weights,
+the sample precision estimates the precision *of the sample*, which is not the precision of
+the system — and a report that does not say so is wrong.
+
+Each item carries `w = N_cell / n_cell` from the snapshot population. The headline precision,
+recall and share-of-review are weighted sums with those weights; intervals come from a
+stratified bootstrap or a design-effect-adjusted Wilson, and the method is named. Unweighted
+per-stratum rates are also published, clearly labelled as per-stratum, because they are what
+the ablation reads.
+
+A stratum present in the sample but absent from the population (or the reverse) is a sampling
+bug, and the script fails rather than inventing a weight. The weights, the population counts
+per cell and the seed are part of the published artifact.
 
 Deliberate oversampling of the hard cases, because a set dominated by obvious malware
 measures nothing:
 
 - indicators that only one source reports (the echo problem, FP-05);
 - indicators whose source score is high but whose tags suggest scanning (FP-08);
-- indicators inside large cloud/CDN ranges (FP-02);
-- KEV-linked indicators (FP-10) — sampled *separately*, see §7.
+- indicators inside large cloud/CDN ranges (FP-02).
+
+Catalogue entries are **not** in this sample. They are published as facts in the
+vulnerability track and are not scored, so there is no indicator verdict to evaluate
+(`decisions/0010`).
 
 The sampling script records the seed and the exact snapshot id. Sampling is regenerated
 with `eval/sample.py` (Week 5); the label set is versioned in the repository.
@@ -85,6 +154,12 @@ Independence is defined, not assumed: two feeds are independent if they have dif
 operators and neither is documented as a mirror/relay of the other. A single submitter
 appearing in three feeds is one source.
 
+The organization is the unit, and that is not a theoretical distinction here. abuse.ch
+operates ThreatFox, URLhaus and Feodo Tracker, so an indicator appearing in two of them is
+reported by one organization. The 2026-11-23 snapshot has 122 such URLs; the rule counts feed
+names and calls them corroborated, which the definition above says is wrong. This is recorded
+in `rules.md` §3 as an active defect, not resolved by relabelling the evidence.
+
 ## 6. Split, and touching the test set once
 
 - 60% calibration, 40% test, stratified, seeded.
@@ -105,9 +180,12 @@ that rule. Otherwise the rule scores perfectly by construction. Concretely:
 | FP-02 verified crawler | rDNS/CDN ranges | rDNS agreement alone |
 | FP-03 source FP list | the source's own FP list | that list |
 | FP-04 stale evidence | `first_seen` / `last_seen` | "looks old" as a label |
-| FP-05 single source | independent feed count | "reported by two feeds" as a label |
+| FP-05 single source | independent organization count | "reported by two feeds" as a label |
 | FP-08 internet noise | GreyNoise noise classification | GreyNoise classification |
-| FP-10 KEV linkage | KEV | "is in KEV" as a label |
+
+FP-10 (KEV linkage) is not in this table any more: it left the indicator track with
+`decisions/0010`, and the catalogue is published as facts, so there is no rule whose input
+could leak into its own evaluation.
 
 So:
 
@@ -137,7 +215,8 @@ touches is not filtering, it is guessing — and the report says so.
 ## 9. Metrics
 
 Evaluated on items the system classifies as actionable (i.e. not routed to
-`needs_review`):
+`needs_review`), using the three headline labels of §3.1 and the post-stratification
+weights of §4.2:
 
 ```
 precision = TP / (TP + FP)
@@ -146,17 +225,24 @@ FPR       = FP / (FP + TN)      among reference negatives (benign + noise)
 review    = |needs_review| / N
 ```
 
+Every term is a weighted count. `unverifiable` items are excluded from `N` and from all four
+metrics, and their share is reported separately — that share is the honest cost of not
+answering, not a rounding error.
+
 Plus:
 
 - **review share** and, within it, the share that turns out `malicious` — the review
   queue exists to catch what the filter cannot decide, so its yield matters;
 - **per-rule table** from §8;
 - **runtime** for a full snapshot (seconds; it is a batch job, not a benchmark);
-- **exact denominators**, printed, so a reader can recompute by hand.
+- **exact denominators** (unweighted, alongside the weighted estimates), printed, so a reader
+  can recompute by hand.
 
-With N in the low hundreds, point estimates are reported with **95% Wilson intervals**.
-A precision of 0.91 on 34 actionable items is `[0.77, 0.97]`, and the report writes it
-that way rather than pretending the third digit exists.
+With an effective sample in the low hundreds, point estimates are reported with **95% Wilson
+intervals**, design-adjusted when weights are applied. A precision of 0.91 on 34 actionable
+items is `[0.77, 0.97]`, and the report writes it that way rather than pretending the third
+digit exists. If the interval is wider than the claim it is meant to support, the claim is
+withdrawn, not softened.
 
 ## 10. Reporting rules
 
@@ -183,7 +269,8 @@ Stated here so they are not discovered by a reader:
    at this", not "relevant to your estate". An indicator can be correctly scored and
    still useless to a specific reader.
 5. **KEV is availability-biased.** KEV presence means known exploitation *somewhere*,
-   not exploitation against you, and absence means nobody has published it yet.
+   not exploitation against you, and absence means nobody has published it yet. It is one
+   reason the catalogue is served as facts instead of a score (`decisions/0010`).
 6. **Boundary labels are judgement calls.** `noise` vs `opportunistic` has no objective
    line. The protocol fixes an order of questions to keep it consistent; it does not
    make it correct.

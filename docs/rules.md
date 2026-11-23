@@ -10,6 +10,44 @@ the signal is worth and lives separately in [`scoring.md`](scoring.md). Keeping 
 is what makes the ablation in [`methodology.md`](methodology.md) §8 possible: a rule that
 cannot show a marginal effect when removed does not justify its complexity.
 
+## The catalogue, frozen on 2026-11-23
+
+This table is the single source of truth for rule ids. Before it existed, `docs/` cited
+FP-01, 02, 03, 04, 05, 07, 08 and 10 in different places, which made it impossible to tell a
+planned rule from an implemented one — and FP-06, FP-09 and FP-11 were cited nowhere at all.
+A gap in the numbering is a gap, not a hidden rule.
+
+| Id | Signal | Where it exists | State |
+|---|---|---|---|
+| FP-01 | RIOT membership (benign service) | prose only (`methodology.md` §7) | not implemented — needs enrichment |
+| FP-02 | verified crawler via rDNS/CDN ranges | prose only (`methodology.md` §7) | not implemented — needs enrichment |
+| FP-03 | the source's own false-positive list | prose only (`sources.md`, ThreatFox note) | not implemented — needs the hunting API |
+| FP-04 | evidence past its type TTL | code (`fp_rules/aging.py`) + §2 below | **active** |
+| FP-05 | single-source corroboration | code (`fp_rules/corroboration.py`) + §3 below | **active, defective** — counts feed names, not organizations |
+| FP-06 | — | — | **never defined** in this repository |
+| FP-07 | usage type (VPN / datacenter / residential) | one sentence in `sources.md` | not implemented — needs AbuseIPDB `usageType` |
+| FP-08 | internet noise (mass scanning) | prose only (`methodology.md` §7) | not implemented — needs GreyNoise |
+| FP-09 | — | — | **never defined** in this repository |
+| FP-10 | KEV linkage | prose only; the `KEV_EXPLOITATION` weight was removed on 2026-11-23 | retired from the IOC track — see `decisions/0010` |
+| FP-11 | Tranco popularity | — | **never defined** in this repository; a domain-popularity rule has been discussed, not specified |
+
+Two consequences follow, and both are enforced rather than promised:
+
+1. **A new rule ships with its row here in the same commit.** The `rules_config_hash` covers
+   the `describe()` output of every implemented rule, so a rule that is not in this table but
+   affects a verdict makes the published config unreproducible.
+2. **An unimplemented rule is never cited as though it ran.** Docs say `not implemented`, the
+   scoring table has no weight for it, and no evaluation claim rests on it. The current live
+   run therefore has exactly two rules and one of them is known to be wrong in a way §3
+   records.
+
+**Why FP-05 is listed as defective rather than pending.** On the 2026-11-23 snapshot, 122
+rows are `CORROBORATED` because a ThreatFox URL also appears in URLhaus. Both feeds are
+operated by abuse.ch. It is one organization, not two, so the rule's own definition of
+independence (`methodology.md` §5) says those rows are single-source. The fix counts
+organizations, which requires a feed that is not abuse.ch — the reason it is scheduled after
+the AbuseIPDB collector rather than before it.
+
 ## 1. The rule contract
 
 Every finding has a status, never a boolean:
@@ -52,7 +90,7 @@ often a residential address by June. The rule ages each indicator against a per-
 | `domain` | 180 days | Matches the six-month window ThreatFox still serves, the only range where "stale" is measurable inside its own retention |
 | `url` | 30 days | A path stops resolving or starts serving something else fast |
 | `hash` | 365 days | A file hash never becomes benign, it becomes irrelevant; one year is the most generous defensible bound |
-| `cve` | none | KEV catalogues *exploitation*, not a decaying indicator. Aging it would delete the only non-IP type the pipeline has |
+| `cve` | none | A CVE is not an indicator and never reaches this table (`decisions/0010`). The branch stays so a misrouted row reports `not_applicable` instead of guessing an age |
 
 TTLs are a versioned **policy** (`POLICY_VERSION`), not scattered constants: changing one
 changes every score, so it changes the report's `config_hash`.
@@ -97,13 +135,25 @@ CVE is out of scope: corroborating a vulnerability is a question about advisorie
 feeds, and the rule reports `not_applicable` rather than pretending the feed count means
 something.
 
-**Known limitation, recorded so it is not discovered later.** Most of the current volume still
-comes from one community feed, so for those rows the rule is close to "the indicator came from
-ThreatFox". It stays `weak` on that basis. The 2026-11-23 snapshot is the first one where the
-rule is not a restatement: 122 of ThreatFox's 494 URLs also appear in URLhaus, and those rows
-move from `fired` to `not_fired`. That is a discrimination, not a quality metric — 122 shared
-URLs prove the counting works, not that single-source indicators are usually false positives.
-`methodology.md` §8 is still what must justify the weight.
+**Known defect, recorded rather than exploited.** The rule counts *feed names*. It has no
+model of the organization behind a feed, and every community name in the current source set
+belongs to abuse.ch — ThreatFox and URLhaus, plus Feodo Tracker on the authoritative side. On
+the 2026-11-23 snapshot, 122 of ThreatFox's 494 URLs also appear in URLhaus, so those rows
+report `not_fired` / `CORROBORATED`. Under the definition of independence in
+`methodology.md` §5 — different operators, neither a mirror of the other — that is one
+organization, and the correct verdict is `fired`. The 122 rows are therefore a **false
+corroboration**, and they are the entire `medium` band of the live run.
+
+Consequences, stated so no reader has to infer them:
+
+- The rule's discrimination on this snapshot is not evidence of quality; it is evidence of an
+  under-specified input. `methodology.md` §8 still decides whether the weight survives.
+- The fix is a `source_organizations` mapping and a count over organizations. It is not
+  scheduled before a second, genuinely independent feed exists: with abuse.ch as the only
+  community operator, the corrected rule would be `not_fired` nowhere and would carry no bit,
+  which is itself the finding.
+- Until then the live distribution is published as produced. Re-tuning the weights to hide
+  it would remove the only visible symptom of the defect.
 
 ## 4. When the rules disagree
 

@@ -15,6 +15,7 @@ a reversed decision is *superseded*, not erased.
 | [0007](0007-publication-boundary.md) | Publication boundary: code and metrics public, feed data not | accepted |
 | [0008](0008-scoring-policy.md) | Scoring: integer points, versioned policy, structural caps | accepted |
 | [0009](0009-read-api-boundary.md) | Read API: one pinned run, keyset pages, no auth in Phase 1 | accepted |
+| [0010](0010-indicator-and-vulnerability-tracks.md) | Separate indicator and vulnerability tracks; catalogue is facts, not a score | accepted |
 
 ## When a record is required
 

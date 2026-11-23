@@ -26,7 +26,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-POLICY_VERSION = "2026-11-23"
+POLICY_VERSION = "2026-11-23.2"
 
 # Bands are named, not numeric, in the result. `high` is the only band that claims
 # "look at this now"; the documentation maps that sentence to the policy, not to a URL.
@@ -41,7 +41,6 @@ DEFAULT_WEIGHTS: dict[str, int] = {
     "SRC_AUTHORITATIVE": 60,  # a curated catalogue / C2 blocklist
     "SRC_COMMUNITY": 45,  # a collaborative feed: a claim
     "SRC_UNCLASSIFIED": 30,  # a feed nobody has classified yet
-    "KEV_EXPLOITATION": 10,  # KEV says exploitation was observed, not merely plausible
     "FRESH_AUTHORITATIVE": 10,  # inside TTL *and* curated: the strongest combination
     "CORROBORATED": 15,  # two or more independent feeds
     "STALE_EVIDENCE": -30,  # past the type's TTL

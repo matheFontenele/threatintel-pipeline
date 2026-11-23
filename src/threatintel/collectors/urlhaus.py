@@ -13,9 +13,10 @@ shape:
 refused if the key somehow appears in the serialized metadata. The bronze payload itself is
 the CSV body, which never contains the key.
 
-This collector is **bronze only**: the CSV column set is asserted at collection time but the
-mapping to silver waits for a live export to confirm it, so the repository does not claim a
-normalizer it has never run against real columns.
+The CSV column set is asserted at collection time and the normalizer reads the same shape
+via the shared `parse_export`, so a provider column change fails at the ingest gate instead
+of producing a silently empty mapping. The live 2026-11-23 export parsed 103,814 rows and
+the normalizer rejected 10 of them individually.
 """
 
 from __future__ import annotations
