@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Local configuration and credentials. Every operator brings their own key.
+.env
+.env.*
+!.env.example
+
+# Feed payloads and derived artifacts never enter the repository.
+# Code and schema are public; data is not.
+data/
+snapshots/
+*.duckdb
+*.duckdb.wal
+*.parquet
+*.ndjson
+
+# Editor and OS noise
+.idea/
+.vscode/
+.DS_Store
