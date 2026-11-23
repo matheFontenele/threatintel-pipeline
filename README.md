@@ -13,11 +13,11 @@ interesting part is not the ingestion — it is the evaluation: knowing where th
 works, where it does not, and being able to prove it.
 
 > **Status: Week 1 in progress.** The design is written (threat model, source inventory,
-> evaluation protocol, decision records). Working today: the CISA KEV collector writes
-> immutable bronze, and the silver contract — identity, normalization, merge — is
-> implemented and tested end to end (1,790 CVEs mapped on 2026-11-23, 0 rejected). No
-> false-positive rules, no scoring, no API yet, so the metrics below stay empty on
-> purpose.
+> evaluation protocol, decision records). Working today: **two collectors** — CISA KEV
+> (1,790 CVEs on 2026-11-23, 0 rejected) and ThreatFox (four indicator types, `ip:port`
+> split, credential in a header) — feeding one silver table with the identity/normalization
+> contract tested end to end. No false-positive rules, no scoring, no API yet, so the
+> metrics below stay empty on purpose.
 
 ## Architecture
 
@@ -110,15 +110,20 @@ cp .env.example .env   # add your own feed credentials
 ```
 
 ```bash
-make collect-kev   # CISA KEV -> data/bronze/cisa_kev/collection_date=YYYY-MM-DD/
-make silver        # bronze -> data/silver/indicators.parquet, upsert by indicator id
-make ingest        # both, in order
+make collect-kev        # CISA KEV -> data/bronze/cisa_kev/collection_date=YYYY-MM-DD/
+make collect-threatfox  # ThreatFox 7-day batch -> data/bronze/threatfox/... (needs ABUSECH_AUTH_KEY)
+make silver             # bronze -> data/silver/indicators.parquet, upsert by indicator id
+make ingest             # all of the above, in order
 make test
 ```
 
-Only the KEV collector exists so far. It needs no credential; every other source in
-[`docs/sources.md`](docs/sources.md) does, and none of them ships until its terms row is
-verified. API, dashboard and scoring are not implemented yet.
+CISA KEV needs no credential. ThreatFox does: create a free key at
+<https://auth.abuse.ch/>, `cp .env.example .env` and set `ABUSECH_AUTH_KEY` (the Makefile
+loads `.env` when present; the file is gitignored). The remaining sources in
+[`docs/sources.md`](docs/sources.md) stay unimplemented until their terms row is verified —
+and note `docs/decisions/0007`: feed-derived indicator values are never published, so
+test fixtures use documentation ranges only. API, dashboard and scoring are not
+implemented yet.
 
 ## Scope
 

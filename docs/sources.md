@@ -29,8 +29,8 @@ documentation said when this file was written (2026-11-23)", not as current trut
 | # | Source | Provides | Auth | Free tier (as documented) | Planned cadence | Redistribution | Status |
 |---|---|---|---|---|---|---|---|
 | 1 | **CISA KEV** | CVEs with known exploitation in the wild | none | public JSON/CSV | daily | public domain work product — verify | `verified 2026-11-23` (endpoint + shape); redistribution still `unverified` |
-| 2 | **abuse.ch — URLhaus** | malicious URLs, payload hashes | Auth-Key (free) | bulk export + API | daily | non-commercial, attribution required — verify | `unverified` |
-| 3 | **abuse.ch — ThreatFox** | IOCs (IP/domain/URL/hash) with malware family | Auth-Key (free) | API + export; drops IOCs older than 6 months (from 2025-05-01) | daily | same as above | `unverified` |
+| 2 | **abuse.ch — URLhaus** | malicious URLs, payload hashes | Auth-Key in the URL path (free) | bulk export, regenerated every 5 min; do not fetch more often | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms); collector **not written** (key-in-URL, see note) |
+| 3 | **abuse.ch — ThreatFox** | IOCs (IP/domain/URL/hash) with malware family | Auth-Key in `Auth-Key` header (free) | `POST` batch query, `days` 1–7; drops IOCs older than 6 months (from 2025-05-01) | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + endpoint); collector implemented, live run pending a key |
 | 4 | **abuse.ch — Feodo Tracker** | botnet C2 IPs | Auth-Key (free) | bulk export | daily | same as above | `unverified` |
 | 5 | **abuse.ch — MalwareBazaar** | malware samples, hashes | Auth-Key (free) | API | weekly, metadata only | same as above | `unverified` |
 | 6 | **AbuseIPDB** | crowd-sourced IP abuse reports, confidence score, usage type, blacklist | API key (free tier) | low daily quota; blacklist capped (~10k entries reported) | daily blacklist | restricted — check explicitly | `unverified` |
@@ -62,14 +62,57 @@ its limits make it enrichment, never bulk scoring.
 
 ### abuse.ch
 
-- One Auth-Key covers URLhaus, ThreatFox, MalwareBazaar and Feodo Tracker. Key is free and
-  mandatory for API use.
+Terms of Use read **2026-11-23** (effective 2025-11-04, last updated 2026-10-21) at
+<https://abuse.ch/terms-of-use/>. Key clauses, quoted because paraphrase loses the teeth:
+
+- **§7.3** — you may not *"copy, adapt, alter, translate, modify or make derivative works
+  based on the Platforms and/or any other of our or Spamhaus' intellectual property,
+  without the express consent of abuse.ch and/or Spamhaus"*.
+- **§7.3** — *"Data or Confidential Information may not be used by users to customise,
+  train, or otherwise improve any artificial intelligence model or product … without
+  Spamhaus' express prior written consent."*
+- **§3** — free access is bounded by fair use: *"Query Volume Limits, and file Export Volume
+  Limits, defined as volumes of Queries and Exports reasonably expected for non-commercial
+  or non-profit purposes"*.
+- **§4.1** — commercial or for-profit use *"may require a paid subscription, which will be
+  managed by Spamhaus"*.
+- **§3.4** — Feodo Tracker, SSL Blacklist and YARAify are explicitly CC0 and exempt from the
+  above. ThreatFox and URLhaus are **not** in that list.
+
+Consequences, recorded in `decisions/0007-publication-boundary.md`:
+
+- An operator may ingest locally with their own key for their own analysis. The repository
+  ships code, not data.
+- **No ThreatFox/URLhaus-derived indicator value is published** — not as a demo dataset, not
+  as a sample in the test suite, not in a label file. Publishing a per-indicator score would
+  embed the indicator, which is exactly the redistribution §7.3 restricts.
+- Published evaluation artifacts carry **aggregate metrics and a salted hash** of each
+  labelled indicator instead of its value. `docs/methodology.md` promises reproducibility;
+  this is the honest limit of it for restricted sources, and the report says so.
+- No model training on the data. Not a constraint today (Phase 1 has no LLM), but recorded so
+  it stays one.
+
+Operational notes:
+
+- One Auth-Key covers URLhaus, ThreatFox, MalwareBazaar and Feodo Tracker.
 - **ThreatFox retention**: IOCs older than 6 months are no longer served (policy from
-  2025-05-01). This is a hard freshness floor — the pipeline cannot assume a stable
-  history, and aging rules must not be calibrated against data the source silently drops.
-- The Hunting API publishes a **false-positive list**. It is a useful rule input (FP-03)
-  and, for that reason, not a valid label for items that rule touches.
-- Terms are non-commercial with attribution. Verify before publishing anything derived.
+  2025-05-01). This is a hard freshness floor — the pipeline cannot assume a stable history,
+  and aging rules must not be calibrated against data the source silently drops.
+- **ThreatFox endpoint** (`verified 2026-11-23`): `POST https://threatfox-api.abuse.ch/api/v1/`
+  with header `Auth-Key` and body `{"query": "get_iocs", "days": N}`, `1 <= N <= 7`.
+  `query_status` is `ok` or `no_result`. `ioc_type` values handled: `domain`, `url`,
+  `ip:port`, `md5_hash`, `sha1_hash`, `sha256_hash`. Timestamps are
+  `YYYY-MM-DD HH:MM:SS UTC`. Because the key travels in a header and the body is a POST,
+  nothing credential-bearing appears in a URL, which is why this source could ship before
+  URLhaus.
+- The Hunting API publishes a **false-positive list**. It is a useful rule input (FP-03) and,
+  for that reason, not a valid label for items that rule touches.
+- **URLhaus is deliberately not implemented yet.** Its export endpoint embeds the Auth-Key in
+  the URL path (`/v2/files/exports/<KEY>/recent.csv`). A key in a URL ends up in exception
+  messages, proxies, and any log that records the request line — a direct conflict with T5.
+  It ships only after a redaction design exists (custom exception text, no request-line
+  logging, key injected as a path segment that never reaches a formatter), and that design
+  is a prerequisite, not a TODO.
 
 ### AbuseIPDB
 

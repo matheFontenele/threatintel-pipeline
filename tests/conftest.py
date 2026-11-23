@@ -17,3 +17,15 @@ def kev_payload(kev_payload_bytes: bytes) -> dict:
     import json
 
     return json.loads(kev_payload_bytes)
+
+
+@pytest.fixture
+def threatfox_payload_bytes() -> bytes:
+    return (FIXTURES / "threatfox_sample.json").read_bytes()
+
+
+@pytest.fixture
+def threatfox_payload(threatfox_payload_bytes: bytes) -> dict:
+    import json
+
+    return json.loads(threatfox_payload_bytes)

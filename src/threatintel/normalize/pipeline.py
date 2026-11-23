@@ -14,14 +14,15 @@ from pathlib import Path
 from typing import Any
 
 from threatintel.normalize.kev import indicators_from_kev
-from threatintel.normalize.silver import upsert_indicators
+from threatintel.normalize.silver import read_indicators, upsert_indicators
+from threatintel.normalize.threatfox import indicators_from_threatfox
 
 KEV_SOURCE_DIR = "cisa_kev"
+THREATFOX_SOURCE_DIR = "threatfox"
 
 
-def iter_kev_bronze(bronze_root: Path) -> list[tuple[str, dict[str, Any]]]:
-    """Yield (bronze_ref, payload) for every KEV collection, oldest first."""
-    source_root = bronze_root / KEV_SOURCE_DIR
+def _iter_bronze(bronze_root: Path, source_dir: str) -> list[tuple[str, dict[str, Any]]]:
+    source_root = bronze_root / source_dir
     if not source_root.is_dir():
         return []
     batches: list[tuple[str, dict[str, Any]]] = []
@@ -32,21 +33,43 @@ def iter_kev_bronze(bronze_root: Path) -> list[tuple[str, dict[str, Any]]]:
     return batches
 
 
-def build_silver(bronze_root: Path, silver_path: Path) -> dict[str, int]:
-    """Map every bronze batch into silver, merging across collection dates."""
-    batches = iter_kev_bronze(bronze_root)
-    stats = {"batches": len(batches), "rejected": 0, "indicators": 0}
-    if not batches:
-        return stats
+def iter_kev_bronze(bronze_root: Path) -> list[tuple[str, dict[str, Any]]]:
+    """Yield (bronze_ref, payload) for every KEV collection, oldest first."""
+    return _iter_bronze(bronze_root, KEV_SOURCE_DIR)
 
+
+def iter_threatfox_bronze(bronze_root: Path) -> list[tuple[str, dict[str, Any]]]:
+    return _iter_bronze(bronze_root, THREATFOX_SOURCE_DIR)
+
+
+def build_silver(bronze_root: Path, silver_path: Path) -> dict[str, int]:
+    """Map every bronze batch into silver, merging across collection dates and sources.
+
+    Reports two counts on purpose: `source_rows` is what the feeds claimed, `indicators`
+    is what survives dedupe. A single number would hide the whole point of the merge.
+    """
+    stats = {"batches": 0, "rejected": 0, "source_rows": 0, "indicators": 0}
     all_indicators = []
-    for bronze_ref, payload in batches:
+
+    for bronze_ref, payload in iter_kev_bronze(bronze_root):
         result = indicators_from_kev(payload, bronze_ref=bronze_ref)
+        stats["batches"] += 1
         stats["rejected"] += len(result.rejected)
+        stats["source_rows"] += len(result.indicators)
         all_indicators.extend(result.indicators)
 
+    for bronze_ref, payload in iter_threatfox_bronze(bronze_root):
+        result = indicators_from_threatfox(payload, bronze_ref=bronze_ref)
+        stats["batches"] += 1
+        stats["rejected"] += len(result.rejected)
+        stats["source_rows"] += len(result.indicators)
+        all_indicators.extend(result.indicators)
+
+    if stats["batches"] == 0:
+        return stats
+
     upsert_indicators(silver_path, all_indicators, silver_path)
-    stats["indicators"] = len(all_indicators)
+    stats["indicators"] = len(read_indicators(silver_path))
     return stats
 
 
@@ -61,8 +84,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no bronze batches under {args.bronze}", file=sys.stderr)
         return 1
     print(
-        f"mapped {stats['indicators']} indicators from {stats['batches']} batch(es), "
-        f"{stats['rejected']} rejected -> {args.silver}"
+        f"mapped {stats['source_rows']} source rows from {stats['batches']} batch(es) "
+        f"into {stats['indicators']} indicators, {stats['rejected']} rejected "
+        f"-> {args.silver}"
     )
     return 0
 

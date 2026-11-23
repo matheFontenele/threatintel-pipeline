@@ -22,6 +22,10 @@ snapshots/
 *.parquet
 *.ndjson
 
+# Labels whose indicator values came from a restricted feed stay local (decisions/0007).
+eval/labeled_sample/*.local.csv
+eval/local/
+
 # Editor and OS noise
 .idea/
 .vscode/

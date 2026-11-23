@@ -12,6 +12,7 @@ a reversed decision is *superseded*, not erased.
 | [0004](0004-license-mit.md) | License: MIT | accepted, reversible |
 | [0005](0005-python-package-layout.md) | Python package layout under `src/threatintel/` | accepted |
 | [0006](0006-indicator-identity.md) | Indicator identity, normalization and merge | accepted |
+| [0007](0007-publication-boundary.md) | Publication boundary: code and metrics public, feed data not | accepted |
 
 ## When a record is required
 
