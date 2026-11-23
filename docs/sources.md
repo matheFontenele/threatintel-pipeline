@@ -29,8 +29,8 @@ documentation said when this file was written (2026-11-23)", not as current trut
 | # | Source | Provides | Auth | Free tier (as documented) | Planned cadence | Redistribution | Status |
 |---|---|---|---|---|---|---|---|
 | 1 | **CISA KEV** | CVEs with known exploitation in the wild | none | public JSON/CSV | daily | public domain work product — verify | `verified 2026-11-23` (endpoint + shape); redistribution still `unverified` |
-| 2 | **abuse.ch — URLhaus** | malicious URLs, payload hashes | Auth-Key in the URL path (free) | bulk export, regenerated every 5 min; do not fetch more often | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + export URL); collector implemented, **bronze only** (columns await a live run) |
-| 3 | **abuse.ch — ThreatFox** | IOCs (IP/domain/URL/hash) with malware family | Auth-Key in `Auth-Key` header (free) | `POST` batch query, `days` 1–7; drops IOCs older than 6 months (from 2025-05-01) | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + endpoint); collector implemented, live run pending a key |
+| 2 | **abuse.ch — URLhaus** | malicious URLs, payload hashes | Auth-Key in the URL path (free) | bulk export, regenerated every 5 min; do not fetch more often | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + export URL); collector + normalizer implemented; live run: 103,814 rows, 10 rejected |
+| 3 | **abuse.ch — ThreatFox** | IOCs (IP/domain/URL/hash) with malware family | Auth-Key in `Auth-Key` header (free) | `POST` batch query, `days` 1–7; drops IOCs older than 6 months (from 2025-05-01) | daily | no derivative works without consent (§7.3) — see `decisions/0007` | `verified 2026-11-23` (terms + endpoint); collector + normalizer implemented; live run: 10,392 IOCs over 7 days |
 | 4 | **abuse.ch — Feodo Tracker** | botnet C2 IPs | **none** — public JSON | no key, no documented limit; still one fetch per hour locally | daily | **CC0, publishable** (§3.4) — see `decisions/0007` | `verified 2026-11-23` (endpoint + shape); collector + normalizer implemented |
 | 5 | **abuse.ch — MalwareBazaar** | malware samples, hashes | Auth-Key (free) | API | weekly, metadata only | same as above | `unverified` |
 | 6 | **AbuseIPDB** | crowd-sourced IP abuse reports, confidence score, usage type, blacklist | API key (free tier) | low daily quota; blacklist capped (~10k entries reported) | daily blacklist | restricted — check explicitly | `unverified` |
@@ -126,9 +126,30 @@ Operational notes:
   - `_meta.json` stores the endpoint with `<KEY>` and the write is refused if the key appears
     in the serialized metadata;
   - the key is validated as a bare path segment (no `/`, `.`, `?`) before it is interpolated.
-  It is **bronze only** on purpose: the CSV columns are asserted at collection time, but the
-  mapping to silver waits for one live export to confirm them, so the repository does not
-  claim a normalizer it has never run.
+- **URLhaus export shape** (`verified 2026-11-23`, live run): `HTTP 200`,
+  `content-type: text/plain`, 26,813,013 bytes, 103,814 data rows. Columns:
+  `id, dateadded, url, url_status, last_online, threat, tags, urlhaus_link, reporter`.
+  The body opens with a `#` comment banner and **comments out its own header line**
+  (`#id,dateadded,...`), so a plain `csv.DictReader` mistakes the banner for a one-column
+  header and never sees the real columns. `parse_export` finds the header by shape — every
+  comma-separated token must look like a column name and at least two required columns must
+  be present — which a data row cannot satisfy (numeric `id`, timestamped `dateadded`, a URL
+  with a scheme). `parse_export` is shared with the normalizer so the ingest gate and the
+  silver mapping read the same bytes the same way.
+- **URLhaus contents** (same run): `url_status` is `online` (79,619) or `offline` (24,195);
+  `last_online` is empty for 2,332 rows; `dateadded` spans roughly 30 days
+  (oldest 2026-10-23 21:02 UTC). Ten rows carry URLs the normalizer rejects (unsupported
+  scheme or no host); they are rejected individually, not fatally. 103,804 unique normalized
+  URLs survive, and **122 of ThreatFox's 494 URLs are corroborated exactly**, which is what
+  gives FP-05 something to work with.
+- Because the recent-URL window is about 30 days and the URL TTL is 30 days, the oldest tail
+  of the export sits exactly on the FP-04 boundary. A live report fires FP-04 on that tail
+  (50 URLs older than 30 days at the 2026-11-23 snapshot). That is the rule doing its job,
+  not a defect: the feed keeps serving a URL after this project's evidence window closes.
+- The normalizer maps one row to one URL indicator. `url_status`, `threat` and `reporter`
+  are attributes; tags combine the `tags` column with `threat`; the submitter stays inside
+  the `reporter` attribute and `distinct_reporters` remains 1, because URLhaus is one feed
+  and counting submitters as independent sources is the echo problem in disguise.
 - **Feodo endpoint** (`verified 2026-11-23`):
   `GET https://feodotracker.abuse.ch/downloads/ipblocklist.json`, no key, a JSON **array**.
   Entry fields observed: `ip_address, port, status, hostname, as_number, as_name, country,

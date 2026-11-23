@@ -149,6 +149,63 @@ def test_feodo_merges_with_threatfox_on_the_same_ip(
     assert merged.tags == ["CobaltStrike", "Emotet", "QakBot", "botnet_cc"]
 
 
+def _bronze_with_urlhaus(
+    bronze: Path, csv_text: str, day: str = "2026-11-23"
+) -> None:
+    target = bronze / "urlhaus" / f"collection_date={day}"
+    target.mkdir(parents=True)
+    (target / "payload.csv").write_text(csv_text, encoding="utf-8")
+    (target / "_meta.json").write_text(json.dumps({"sha256": "uh", "count": 1}))
+
+
+URLHAUS_HEADER = (
+    "id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter\n"
+)
+
+
+def test_urlhaus_csv_batch_lands_in_silver(tmp_path, urlhaus_payload_bytes):
+    bronze = tmp_path / "bronze"
+    _bronze_with_urlhaus(bronze, urlhaus_payload_bytes.decode("utf-8-sig"))
+    silver = tmp_path / "indicators.parquet"
+
+    stats = build_silver(bronze, silver)
+
+    assert stats == {"batches": 1, "rejected": 0, "source_rows": 2, "indicators": 2}
+    indicators = read_indicators(silver)
+    assert {item.type.value for item in indicators} == {"url"}
+    assert {item.bronze_refs[0] for item in indicators} == {
+        "urlhaus/collection_date=2026-11-23"
+    }
+
+
+def test_urlhaus_url_merges_with_threatfox_on_the_same_url(
+    tmp_path, threatfox_payload_bytes
+):
+    """The second community source is what turns FP-05 from a universal verdict into a rule."""
+    bronze = tmp_path / "bronze"
+    _bronze_with_threatfox(bronze, threatfox_payload_bytes)
+    _bronze_with_urlhaus(
+        bronze,
+        URLHAUS_HEADER
+        + "3600009,2026-11-19 23:41:55,http://203.0.113.44:8080/gate.php,online,"
+        + "2026-11-20 03:02:10,malware_download,\"qakbot\","
+        + "https://urlhaus.abuse.ch/url/3600009/,reporter_x\n",
+    )
+    silver = tmp_path / "indicators.parquet"
+
+    stats = build_silver(bronze, silver)
+    indicators = read_indicators(silver)
+    merged = next(
+        item for item in indicators if item.value == "http://203.0.113.44:8080/gate.php"
+    )
+
+    assert stats == {"batches": 2, "rejected": 0, "source_rows": 5, "indicators": 4}
+    assert merged.distinct_reporters == 2
+    assert set(merged.attributes) == {"threatfox", "urlhaus"}
+    assert merged.tags == ["malware_download", "payload_delivery", "qakbot"]
+    assert merged.source_confidence == {"threatfox": 1.0}, "URLhaus publishes no score"
+
+
 def test_empty_bronze_reports_nothing_written(tmp_path, capsys):
     stats = build_silver(tmp_path, tmp_path / "indicators.parquet")
     assert stats == {"batches": 0, "rejected": 0, "source_rows": 0, "indicators": 0}

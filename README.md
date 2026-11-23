@@ -13,17 +13,18 @@ interesting part is not the ingestion — it is the evaluation: knowing where th
 works, where it does not, and being able to prove it.
 
 > **Status: Week 1 in progress.** The design is written (threat model, source inventory,
-> evaluation protocol, decision records). Working today: three collectors feeding one silver
-> table — CISA KEV (1,790 CVEs on 2026-11-23, 0 rejected), ThreatFox (four indicator types,
-> `ip:port` split, credential in a header) and Feodo Tracker (public, CC0, per-port entries
-> collapsed to one IP indicator). URLhaus has a bronze-only collector: the credential sits
-> in the URL path, so it ships with the redaction design but without a silver mapping until a
-> live export confirms the columns. On top of silver, two explainable rules run — FP-04
-> (stale evidence, per-type TTL) and FP-05 (single-source corroboration) — and emit a report
-> reproducible from `(snapshot, as_of, config_hash)` that carries ids and counts, never
-> indicator values. The identity/normalization/merge contract is tested end to end, including
-> a cross-source merge on the same IP. No scoring, no API yet, so the metrics below stay empty
-> on purpose.
+> evaluation protocol, decision records). Working today: four collectors feeding one silver
+> table, all run live on 2026-11-23 — CISA KEV (1,790 CVEs, 0 rejected), ThreatFox (10,392
+> IOCs over 7 days, four indicator types, `ip:port` split, credential in a header), Feodo
+> Tracker (public, CC0, per-port entries collapsed to one IP indicator) and URLhaus (103,814
+> export rows, 10 unparseable URLs rejected, credential in the URL path). The URLhaus export
+> comments out its own header line, so the parser locates it by shape rather than by position.
+> On top of silver, two explainable rules run — FP-04 (stale evidence, per-type TTL) and FP-05
+> (single-source corroboration) — and emit a report reproducible from
+> `(snapshot, as_of, config_hash)` that carries ids and counts, never indicator values. The
+> snapshot holds 113,686 indicators; 122 URLs are corroborated across ThreatFox and URLhaus,
+> which is the cross-source merge the rules depend on. No scoring, no API yet, so the metrics
+> below stay empty on purpose.
 
 ## Architecture
 
@@ -133,10 +134,10 @@ cp .env.example .env   # add your own feed credentials
 make collect-kev        # CISA KEV -> data/bronze/cisa_kev/collection_date=YYYY-MM-DD/
 make collect-feodo      # Feodo C2 blocklist -> data/bronze/feodo/... (no credential)
 make collect-threatfox  # ThreatFox 7-day batch -> data/bronze/threatfox/... (needs ABUSECH_AUTH_KEY)
-make collect-urlhaus    # URLhaus recent export -> data/bronze/urlhaus/... (bronze only, needs key)
+make collect-urlhaus    # URLhaus recent export -> data/bronze/urlhaus/... (needs key)
 make silver             # bronze -> data/silver/indicators.parquet, upsert by indicator id
 make rules              # FP-04/FP-05 report over silver (pass --as-of for reproducibility)
-make ingest             # collect-kev + collect-feodo + collect-threatfox + silver
+make ingest             # all four collectors + silver
 make test
 ```
 

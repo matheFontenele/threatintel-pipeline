@@ -130,6 +130,40 @@ def test_html_is_rejected_even_with_http_200(tmp_path):
     assert not _target(tmp_path).exists()
 
 
+def test_live_preamble_and_commented_header_are_skipped():
+    """The live export opens with a `#` banner and comments the header line itself."""
+    payload = (
+        b"# URLhaus recent-URL export\n"
+        b"# generated every 5 minutes\n"
+        b"#\n"
+        b"#id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter\n"
+        b'3600001,2026-11-23 04:11:00,http://malware-download.example/payload.elf,'
+        b'online,2026-11-23 04:11:00,malware_download,"elf,mozi",'
+        b"https://urlhaus.abuse.ch/url/3600001/,reporter_x\n"
+    )
+
+    rows, columns = urlhaus.validate_payload(payload)
+
+    assert columns == [
+        "id",
+        "dateadded",
+        "url",
+        "url_status",
+        "last_online",
+        "threat",
+        "tags",
+        "urlhaus_link",
+        "reporter",
+    ]
+    assert len(rows) == 1
+    assert rows[0]["url"] == "http://malware-download.example/payload.elf"
+
+
+def test_header_not_found_is_rejected():
+    with pytest.raises(CollectorError, match="no recognisable CSV header"):
+        urlhaus.validate_payload(b"# just a banner\n\n1,2,3\n")
+
+
 def test_missing_required_columns_is_rejected():
     with pytest.raises(CollectorError, match="missing required column"):
         urlhaus.validate_payload(b"id,dateadded\n1,2026-11-23\n")

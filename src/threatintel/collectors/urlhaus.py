@@ -53,6 +53,10 @@ DEFAULT_TIMEOUT = 120.0
 # A key is a URL path segment here, so it is validated to contain no path syntax at all.
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 REQUIRED_COLUMNS = frozenset({"id", "dateadded", "url"})
+# A column name in the header line. Deliberately strict: a data row must never be mistaken
+# for the header, so tokens with a URL scheme, a colon or a timestamp cannot match.
+COLUMN_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_ .\-]*$")
+MAX_PREAMBLE_LINES = 200
 
 
 class CollectorError(RuntimeError):
@@ -151,6 +155,62 @@ def fetch_payload(
             client.close()
 
 
+def _split_header(text: str) -> tuple[list[str], str]:
+    """Find the header line and return (column names, remaining CSV text).
+
+    The live export opens with a `#`-prefixed comment banner and a blank line, and the
+    header itself is commented out (`#id,dateadded,...`). A plain `csv.DictReader` therefore
+    takes the banner as a one-column header and never sees the real columns. The header is
+    located by shape: a line whose comma-separated tokens all look like column names and
+    that carries at least two required columns. Data rows cannot match — their `id` is
+    numeric and their `dateadded`/`url` hold a timestamp and a scheme.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines[:MAX_PREAMBLE_LINES]):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        candidate = stripped[1:].strip() if stripped.startswith("#") else stripped
+        if not candidate:
+            continue
+        fields = [field.strip().strip('"').strip() for field in next(csv.reader([candidate]))]
+        if len(fields) < 2 or not all(COLUMN_NAME_RE.match(field) for field in fields):
+            continue
+        # Two required columns are enough to call it a header; a partial column set is then
+        # reported precisely by the caller instead of as "no header".
+        if len(REQUIRED_COLUMNS & set(fields)) >= 2:
+            return fields, "\n".join(lines[index + 1 :])
+    raise CollectorError(
+        "URLhaus export has no recognisable CSV header "
+        f"(looked for {', '.join(sorted(REQUIRED_COLUMNS))} in the first "
+        f"{MAX_PREAMBLE_LINES} lines)"
+    )
+
+
+def parse_export(text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parse the export body into (rows, column names), tolerating the comment banner.
+
+    Public because the silver normalizer must read exactly the same bytes the collector
+    validated; a second, subtly different header-skipping routine is how a pipeline starts
+    disagreeing with its own ingest gate.
+    """
+    columns, body = _split_header(text)
+    missing = sorted(REQUIRED_COLUMNS - set(columns))
+    if missing:
+        raise CollectorError(f"URLhaus export is missing required column(s): {', '.join(missing)}")
+    reader = csv.DictReader(io.StringIO(body), fieldnames=columns)
+    rows = []
+    for row in reader:
+        values = [value if isinstance(value, str) else "" for value in row.values()]
+        if not any(value.strip() for value in values):
+            continue
+        rows.append(row)
+    for index, row in enumerate(rows):
+        if not (row.get("url") or "").strip():
+            raise CollectorError(f"row[{index}] has no url")
+    return rows, columns
+
+
 def validate_payload(raw: bytes) -> tuple[list[dict[str, Any]], list[str]]:
     """Reject HTML and confirm the expected columns; return (rows, column names).
 
@@ -168,19 +228,7 @@ def validate_payload(raw: bytes) -> tuple[list[dict[str, Any]], list[str]]:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise CollectorError("URLhaus export is not valid UTF-8") from exc
-
-    reader = csv.DictReader(io.StringIO(text))
-    columns = [name.strip() for name in (reader.fieldnames or []) if name and name.strip()]
-    if not columns:
-        raise CollectorError("URLhaus export has no CSV header")
-    missing = sorted(REQUIRED_COLUMNS - set(columns))
-    if missing:
-        raise CollectorError(f"URLhaus export is missing required column(s): {', '.join(missing)}")
-    rows = [row for row in reader if any((value or "").strip() for value in row.values())]
-    for index, row in enumerate(rows):
-        if not (row.get("url") or "").strip():
-            raise CollectorError(f"row[{index}] has no url")
-    return rows, columns
+    return parse_export(text)
 
 
 def _write_atomic(path: Path, data: bytes) -> None:

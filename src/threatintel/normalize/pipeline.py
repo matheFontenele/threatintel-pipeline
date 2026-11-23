@@ -17,10 +17,12 @@ from threatintel.normalize.feodo import indicators_from_feodo
 from threatintel.normalize.kev import indicators_from_kev
 from threatintel.normalize.silver import read_indicators, upsert_indicators
 from threatintel.normalize.threatfox import indicators_from_threatfox
+from threatintel.normalize.urlhaus import indicators_from_urlhaus
 
 KEV_SOURCE_DIR = "cisa_kev"
 THREATFOX_SOURCE_DIR = "threatfox"
 FEODO_SOURCE_DIR = "feodo"
+URLHAUS_SOURCE_DIR = "urlhaus"
 
 
 def _iter_bronze(bronze_root: Path, source_dir: str) -> list[tuple[str, Any]]:
@@ -46,6 +48,19 @@ def iter_threatfox_bronze(bronze_root: Path) -> list[tuple[str, Any]]:
 
 def iter_feodo_bronze(bronze_root: Path) -> list[tuple[str, Any]]:
     return _iter_bronze(bronze_root, FEODO_SOURCE_DIR)
+
+
+def iter_urlhaus_bronze(bronze_root: Path) -> list[tuple[str, str]]:
+    """URLhaus bronze is CSV, not JSON, so it gets its own reader."""
+    source_root = bronze_root / URLHAUS_SOURCE_DIR
+    if not source_root.is_dir():
+        return []
+    batches: list[tuple[str, str]] = []
+    for payload_path in sorted(source_root.glob("collection_date=*/payload.csv")):
+        text = payload_path.read_bytes().decode("utf-8-sig")
+        bronze_ref = payload_path.parent.relative_to(bronze_root).as_posix()
+        batches.append((bronze_ref, text))
+    return batches
 
 
 def build_silver(bronze_root: Path, silver_path: Path) -> dict[str, int]:
@@ -75,6 +90,13 @@ def build_silver(bronze_root: Path, silver_path: Path) -> dict[str, int]:
 
     for bronze_ref, payload in iter_feodo_bronze(bronze_root):
         result = indicators_from_feodo(payload, bronze_ref=bronze_ref)
+        stats["batches"] += 1
+        stats["rejected"] += len(result.rejected)
+        stats["source_rows"] += len(result.indicators)
+        all_indicators.extend(result.indicators)
+
+    for bronze_ref, text in iter_urlhaus_bronze(bronze_root):
+        result = indicators_from_urlhaus(text, bronze_ref=bronze_ref)
         stats["batches"] += 1
         stats["rejected"] += len(result.rejected)
         stats["source_rows"] += len(result.indicators)

@@ -97,10 +97,13 @@ CVE is out of scope: corroborating a vulnerability is a question about advisorie
 feeds, and the rule reports `not_applicable` rather than pretending the feed count means
 something.
 
-**Known limitation, recorded so it is not discovered later.** With the current source mix this
-rule is close to "the indicator came from ThreatFox". It stays `weak` on that basis, and
-`methodology.md` §8 is what must justify it once the mix widens. A rule that only restates its
-input is exactly what ablation is designed to expose.
+**Known limitation, recorded so it is not discovered later.** Most of the current volume still
+comes from one community feed, so for those rows the rule is close to "the indicator came from
+ThreatFox". It stays `weak` on that basis. The 2026-11-23 snapshot is the first one where the
+rule is not a restatement: 122 of ThreatFox's 494 URLs also appear in URLhaus, and those rows
+move from `fired` to `not_fired`. That is a discrimination, not a quality metric — 122 shared
+URLs prove the counting works, not that single-source indicators are usually false positives.
+`methodology.md` §8 is still what must justify the weight.
 
 ## 4. When the rules disagree
 

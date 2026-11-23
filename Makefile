@@ -29,8 +29,9 @@ collect-feodo:
 collect-threatfox:
 	.venv/bin/python -m threatintel.collectors.threatfox --out data/bronze --days 7
 
-# Bronze only for now: the export columns are asserted at collection time, but the
-# silver mapping ships after one live run confirms them. Needs ABUSECH_AUTH_KEY.
+# The export comments out its own header line; the parser locates it by shape.
+# The body is ~27 MB and 10^5 rows, so silver takes noticeably longer with it. Needs
+# ABUSECH_AUTH_KEY.
 collect-urlhaus:
 	.venv/bin/python -m threatintel.collectors.urlhaus --out data/bronze
 
@@ -43,4 +44,4 @@ silver:
 rules:
 	.venv/bin/python -m threatintel.fp_rules --silver data/silver/indicators.parquet
 
-ingest: collect-kev collect-feodo collect-threatfox silver
+ingest: collect-kev collect-feodo collect-threatfox collect-urlhaus silver
